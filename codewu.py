@@ -18,7 +18,7 @@ import subprocess
 import sys
 import textwrap
 import time
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -43,8 +43,9 @@ MODEL = os.environ.get("CODEWU_MODEL", "claude-opus-4.6-1m")
 API_KEY = os.environ.get("CODEWU_API_KEY", "placeholder-not-used-by-proxy")
 
 CWD = Path(os.getcwd()).resolve()
-SESSION_DIR = CWD / ".codewu" / "sessions"
+SESSION_DIR = Path.home() / ".codewu" / "sessions"  # global, shared across cwds
 MAX_OUTPUT_BYTES = 8 * 1024  # truncate tool outputs to 8 KB
+TODAY = date.today().isoformat()
 
 IS_WINDOWS = platform.system() == "Windows"
 SHELL_HINT = "PowerShell" if IS_WINDOWS else "POSIX sh"
@@ -57,6 +58,7 @@ SYSTEM_PROMPT = f"""You are CodeWu, a coding agent that builds JS and Python pro
 
 ENVIRONMENT
 - Working directory: {CWD}
+- Today's date: {TODAY}
 - Host OS: {platform.system()} {platform.release()}
 - run_cmd executes via: {SHELL_HINT}
 
@@ -67,6 +69,12 @@ RULES
 - Before reporting a task as done, run a verification step (execute the program, run tests, or inspect the resulting file).
 - Before non-trivial changes, explore the current state with list_dir / read_file.
 - Keep messages short. Prefer doing over describing.
+
+TURN COMPLETION
+- A turn ends ONLY when (a) the work is fully done and verified, or (b) you have a specific question the user must answer before you can proceed.
+- Verbal-only responses such as "I'll fix it", "let me update X", "我来修正一下", "我来加上" — without a tool call in the SAME response — are a bug. Do not produce them.
+- If you say you will do something, the next action in this same turn MUST be the tool call that does it. Do not stop and wait for the user to say "continue".
+- "Continuing" is your job: once you have decided on the next step, just do it.
 """
 
 
@@ -323,7 +331,12 @@ def new_session_id() -> str:
 
 def save_session(session_id: str, messages: list[dict[str, Any]]) -> None:
     SESSION_DIR.mkdir(parents=True, exist_ok=True)
-    payload = {"session_id": session_id, "model": MODEL, "messages": messages}
+    payload = {
+        "session_id": session_id,
+        "model": MODEL,
+        "cwd": str(CWD),
+        "messages": messages,
+    }
     path = SESSION_DIR / f"{session_id}.json"
     tmp = path.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -343,24 +356,26 @@ def load_session(session_id: str | None) -> tuple[str, list[dict[str, Any]]]:
     return payload["session_id"], payload["messages"]
 
 
-def list_sessions() -> list[tuple[str, str]]:
+def list_sessions() -> list[tuple[str, str, str]]:
+    """Returns list of (session_id, cwd, first_user_msg_preview)."""
     if not SESSION_DIR.exists():
         return []
-    rows: list[tuple[str, str]] = []
+    rows: list[tuple[str, str, str]] = []
     for p in sorted(SESSION_DIR.glob("*.json")):
         if p.name == "latest.json":
             continue
         try:
             payload = json.loads(p.read_text(encoding="utf-8"))
             sid = payload.get("session_id", p.stem)
+            cwd = payload.get("cwd", "?")
             first_user = next(
                 (m.get("content", "") for m in payload.get("messages", []) if m.get("role") == "user"),
                 "",
             )
             first_user = (first_user or "").replace("\n", " ")[:60]
-            rows.append((sid, first_user))
+            rows.append((sid, cwd, first_user))
         except Exception:
-            rows.append((p.stem, "(unreadable)"))
+            rows.append((p.stem, "?", "(unreadable)"))
     return rows
 
 
@@ -454,9 +469,14 @@ def _cmd_sessions(arg, sid, msgs):
     rows = list_sessions()
     if not rows:
         print("(no saved sessions)")
-    else:
-        for s, hint in rows:
-            print(f"  {s}  —  {hint}")
+        return sid, msgs, False
+    sid_w = max(len(r[0]) for r in rows)
+    cwd_w = min(50, max(len(r[1]) for r in rows))
+    print(f"  {'session_id':<{sid_w}}  {'cwd':<{cwd_w}}  first message")
+    print(f"  {'-' * sid_w}  {'-' * cwd_w}  {'-' * 12}")
+    for s, cwd, hint in rows:
+        cwd_disp = cwd if len(cwd) <= cwd_w else "..." + cwd[-(cwd_w - 3):]
+        print(f"  {s:<{sid_w}}  {cwd_disp:<{cwd_w}}  {hint}")
     return sid, msgs, False
 
 

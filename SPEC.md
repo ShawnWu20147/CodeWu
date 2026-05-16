@@ -136,9 +136,9 @@ D:\git-nonwork\CodeWu\
 
 ## 13. Session Persistence & Resume
 
-- **每轮回写**：每完成一次「user → assistant 最终文本」（即一次 inner-loop 收敛），把完整 `messages[]` 原子写入 `.codewu/sessions/<session_id>.json`
+- **每轮回写**：每完成一次「user → assistant 最终文本」（即一次 inner-loop 收敛），把完整 `messages[]` 原子写入 `~/.codewu/sessions/<session_id>.json`（v1.4 起改为全局存储，session JSON 含 `cwd` 字段标记发起目录）
 - **session_id**：启动时生成 `YYYYMMDD-HHMMSS-<6hex>`
-- **同步 latest.json**：每次保存后覆盖 `.codewu/sessions/latest.json` 为同样内容（便于 `/resume` 默认拿最近一次）
+- **同步 latest.json**：每次保存后覆盖 `~/.codewu/sessions/latest.json` 为同样内容（便于 `/resume` 默认拿最近一次）
 - **CLI 启动模式**：
   - 无参数 → 新建会话
   - `--resume`（不带值） → 加载 `latest.json`
@@ -174,6 +174,11 @@ D:\git-nonwork\CodeWu\
   - 新增 `--allow-all` CLI flag：跳过 y/n 提示但保留 preview，banner 显眼 ⚠ 警告
   - 顺手修了 `approve_or_skip` 中 `edit` 命令后 `cmd` 变量未刷新的小 bug
 - 2026-05-16 提交 git + 推送 `https://github.com/ShawnWu20147/CodeWu`（commit 18bbff5）
+- 2026-05-16 v1.4 用户四次反馈后驱动：
+  - **`SESSION_DIR` 移到 `~/.codewu/sessions/`** 全局存储；session JSON 加 `cwd` 字段；`/sessions` 显示 `session_id | cwd | first message` 三列对齐
+  - **不自动迁移旧 `<cwd>/.codewu/`**——存在的让用户自己处理
+  - **`SYSTEM_PROMPT` 加 `Today's date: <ISO>`** 注入；验证模型回答正确日期
+  - **新增 `TURN COMPLETION` 章节**：明确禁止「verbal promise without action」（例：「我来修正一下：」+ 无 tool_call 即 turn 结束）。规定 turn 仅在 (a) work fully done & verified 或 (b) genuinely need user input 两种情况下才结束
 - 2026-05-16 v1.3 用户三次反馈后驱动：
   - **Ctrl+C / Ctrl+D 退出也打印 `Session saved` + `Resume:` 提示**；空 session 不打印（避免误导），有内容则在退出前强制 save_session 一次
   - **`run_turn` 中途 `KeyboardInterrupt` 完整回滚** 至 user 消息之前，避免遗留孤儿 `tool_calls` 让下轮 API 报错

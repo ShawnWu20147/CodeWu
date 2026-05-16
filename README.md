@@ -86,7 +86,7 @@ Prefix any line with `!` to run it in the shell yourself. The command runs **wit
 
 ## Session storage
 
-Each turn is persisted atomically to `<cwd>/.codewu/sessions/<id>.json`, and `latest.json` is updated as a pointer for `--resume`. Sessions are per-working-directory: running `codewu` in `~/projects/a/` and in `~/projects/b/` keeps two independent histories.
+Each turn is persisted atomically to `~/.codewu/sessions/<id>.json` (global, shared across all projects), and `latest.json` is updated as a pointer for `--resume`. The session JSON also records the `cwd` it was started in, so `/sessions` shows you which project each session belongs to.
 
 ## Quickstart task
 
