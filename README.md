@@ -1,6 +1,6 @@
 # CodeWu
 
-A minimal coding agent prototype. Single-file Python (`main.py`), one external dep (`openai`), four local tools, per-call y/n approval for any side effect.
+A minimal coding agent prototype. Single-file Python (`codewu.py`), one external dep (`openai`), four local tools, per-call y/n approval for any side effect.
 
 > Builds JS or Python programs. See [SPEC.md](./SPEC.md) for the design contract.
 
@@ -11,24 +11,35 @@ A minimal coding agent prototype. Single-file Python (`main.py`), one external d
 
 ## Install
 
+### Option A — install globally as a CLI (recommended)
+
+```powershell
+pip install -e D:\path\to\CodeWu
+```
+
+After this, `codewu` is on your `PATH` and you can run it from **any** working directory. The session log (`.codewu/sessions/`) is stored under that directory, so each project gets its own history.
+
+### Option B — run directly without install
+
 ```powershell
 pip install -r requirements.txt
+python codewu.py
 ```
 
 ## Run
 
 ```powershell
-# new session
-python main.py
+# new session in current directory
+codewu
 
-# resume the most recent session
-python main.py --resume
+# resume the most recent session in current directory
+codewu --resume
 
 # resume a specific session
-python main.py --resume 20260516-201437-21d227
+codewu --resume 20260516-201437-21d227
 
 # bypass tool approval prompts (previews still print) — use with care
-python main.py --allow-all
+codewu --allow-all
 ```
 
 ## Configuration (env vars, all optional)
@@ -52,18 +63,30 @@ python main.py --allow-all
 
 ## In-REPL commands
 
+### Slash commands
+
 | Command | Effect |
 |---------|--------|
 | `/help` (or bare `/`) | List all commands |
-| `/exit` / `/quit` | Quit; prints `--resume` hint with session id |
+| `/exit` / `/quit` (or `Ctrl+C` / `Ctrl+D`) | Quit; prints `--resume` hint with session id |
 | `/sessions` | List saved sessions in `.codewu/sessions/` |
 | `/resume [id]` | Switch to another saved session (defaults to latest); replays history |
 | `/new` | Start a fresh session |
 | `/dump` | Show message count + last 3 message previews (debug) |
 
+### Bang shortcut — run a shell command directly
+
+Prefix any line with `!` to run it in the shell yourself. The command runs **without approval** (you typed it), the output is shown, and the (`command`, `output`) pair is appended to the conversation context so the agent sees it on the next turn.
+
+```
+> !git status
+> !npm test
+> !ls -la
+```
+
 ## Session storage
 
-Each turn is persisted atomically to `.codewu/sessions/<id>.json`, and `latest.json` is updated as a pointer for `--resume`.
+Each turn is persisted atomically to `<cwd>/.codewu/sessions/<id>.json`, and `latest.json` is updated as a pointer for `--resume`. Sessions are per-working-directory: running `codewu` in `~/projects/a/` and in `~/projects/b/` keeps two independent histories.
 
 ## Quickstart task
 

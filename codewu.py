@@ -432,9 +432,21 @@ def run_turn(client: OpenAI, messages: list[dict[str, Any]]) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _print_exit_hint(session_id: str, messages: list[dict[str, Any]]) -> None:
+    has_content = any(m.get("role") in {"user", "assistant"} for m in messages)
+    if not has_content:
+        return  # empty session — nothing to persist or resume
+    try:
+        save_session(session_id, messages)
+    except Exception as e:
+        print(f"\n[!] failed to persist session: {type(e).__name__}: {e}")
+        return
+    print(f"\nSession saved: {session_id}")
+    print(f"Resume:        codewu --resume {session_id}")
+
+
 def _cmd_exit(arg, sid, msgs):
-    print(f"\nSession saved: {sid}")
-    print(f"Resume:        python main.py --resume {sid}")
+    _print_exit_hint(sid, msgs)
     return sid, msgs, True
 
 
@@ -512,6 +524,25 @@ def handle_slash(line: str, session_id: str, messages: list[dict[str, Any]]) -> 
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# Bang shortcut: run a shell command directly, append output to context.
+# ---------------------------------------------------------------------------
+
+
+def handle_bang(line: str, messages: list[dict[str, Any]]) -> None:
+    cmd = line[1:].strip()
+    if not cmd:
+        print("[!] usage: !<command>   e.g. !git status   (runs in shell, no approval, output appended to context)")
+        return
+    result = tool_run_cmd(cmd)
+    output = result.get("result") or result.get("error") or ""
+    print(output)
+    messages.append({
+        "role": "user",
+        "content": f"[I ran: {cmd}]\n{output}",
+    })
 
 
 HISTORY_TRUNCATE = 500
@@ -616,24 +647,33 @@ def main() -> int:
         try:
             line = input("\n> ").strip()
         except (EOFError, KeyboardInterrupt):
-            print()
+            _print_exit_hint(session_id, messages)
             break
         if not line:
             continue
+
         if line.startswith("/"):
             session_id, messages, should_exit = handle_slash(line, session_id, messages)
             if should_exit:
                 break
             continue
 
+        if line.startswith("!"):
+            handle_bang(line, messages)
+            save_session(session_id, messages)
+            continue
+
+        user_msg_idx = len(messages)
         messages.append({"role": "user", "content": line})
         try:
             run_turn(client, messages)
+        except KeyboardInterrupt:
+            del messages[user_msg_idx:]
+            print("\n[!] turn interrupted — rolled back to before this user message")
+            continue
         except Exception as e:
             print(f"[!] turn failed: {type(e).__name__}: {e}")
-            # roll back the user message so the session stays consistent
-            if messages and messages[-1].get("role") == "user":
-                messages.pop()
+            del messages[user_msg_idx:]
             continue
         save_session(session_id, messages)
 

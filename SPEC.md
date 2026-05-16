@@ -100,18 +100,20 @@ while True:
 - 工作目录默认 `os.getcwd()`，所有路径相对它解析
 - Shell 选择：Windows 默认 `powershell -NoProfile -Command`，POSIX 默认 `sh -c`；platform 在 system prompt 里告知模型
 
-## 10. Repository Layout（v1）
+## 10. Repository Layout（v1.3+）
 
 ```
 D:\git-nonwork\CodeWu\
 ├── SPEC.md                    # 本文件
-├── main.py                    # 全部逻辑
-├── requirements.txt           # openai 一行
-├── README.md                  # 用法 + 配置说明（最后再补）
-└── .codewu/
+├── codewu.py                  # 全部逻辑（原 main.py，v1.3 重命名）
+├── pyproject.toml             # v1.3 加入；声明 codewu console script
+├── requirements.txt           # openai 一行（Option B 用）
+├── README.md                  # 用法 + 配置说明
+├── .gitignore                 # 忽略运行时 .codewu/、__pycache__/ 等
+└── <cwd>/.codewu/             # 注意：sessions 落在用户 cwd，不是仓库内
     └── sessions/
-        ├── <ts>-<slug>.json   # 每次会话的 messages 完整序列化
-        └── latest.json        # 指向最近一次会话的副本/软链
+        ├── <ts>-<slug>.json
+        └── latest.json
 ```
 
 ## 11. Done Contract
@@ -171,6 +173,14 @@ D:\git-nonwork\CodeWu\
   - `/exit` & `/quit` 打印 `Session saved: <id>` + `Resume: python main.py --resume <id>`
   - 新增 `--allow-all` CLI flag：跳过 y/n 提示但保留 preview，banner 显眼 ⚠ 警告
   - 顺手修了 `approve_or_skip` 中 `edit` 命令后 `cmd` 变量未刷新的小 bug
+- 2026-05-16 提交 git + 推送 `https://github.com/ShawnWu20147/CodeWu`（commit 18bbff5）
+- 2026-05-16 v1.3 用户三次反馈后驱动：
+  - **Ctrl+C / Ctrl+D 退出也打印 `Session saved` + `Resume:` 提示**；空 session 不打印（避免误导），有内容则在退出前强制 save_session 一次
+  - **`run_turn` 中途 `KeyboardInterrupt` 完整回滚** 至 user 消息之前，避免遗留孤儿 `tool_calls` 让下轮 API 报错
+  - **重命名 `main.py` → `codewu.py`**（git mv 保留历史）；模块名不再泛用，避免全局 import 冲突
+  - **新增 `pyproject.toml`**：声明 console script `codewu = "codewu:main"`；`pip install -e .` 后 `codewu` 全局可用，工作目录 = 用户 shell cwd，session 落在 `<cwd>/.codewu/sessions/`
+  - **新增 `!cmd` 直执行**（仿 Claude Code）：`!` 开头的行直接走 PowerShell/sh，无审批（用户输入即批准），输出打印 + 追加到 messages 作 user 角色（前缀 `[I ran: ...]`），不触发 LLM 调用
+  - 提取 `_print_exit_hint(sid, msgs)` 与 `handle_bang(line, msgs)` 两个辅助函数
 
 ## 16. Known Limitations / Reverse-Sync 发现
 
