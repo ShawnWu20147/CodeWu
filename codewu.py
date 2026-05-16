@@ -16,6 +16,7 @@ import platform
 import secrets
 import subprocess
 import sys
+import re
 import textwrap
 import time
 from datetime import date, datetime
@@ -75,6 +76,7 @@ TURN COMPLETION
 - Verbal-only responses such as "I'll fix it", "let me update X", "我来修正一下", "我来加上" — without a tool call in the SAME response — are a bug. Do not produce them.
 - If you say you will do something, the next action in this same turn MUST be the tool call that does it. Do not stop and wait for the user to say "continue".
 - "Continuing" is your job: once you have decided on the next step, just do it.
+- NEVER end a response with `:`, `：`, `...`, or `。。。`. These signal "to be continued", but a response with no tool call ends the turn. Either continue with a tool call in the same response, or finish your sentence properly.
 """
 
 
@@ -384,6 +386,43 @@ def list_sessions() -> list[tuple[str, str, str]]:
 # ---------------------------------------------------------------------------
 
 
+MAX_AUTO_CONTINUE = 3
+PROMISE_TAIL_CHARS = (":", "：", "...", "。。。", "—")
+
+# Action verbs that, when paired with "I'll / let me / I will", indicate a real action promise
+# (vs. weak phrases like "let me know" or "let me see").
+_ACTION_VERBS = (
+    r"fix|update|add|write|create|run|check|implement|change|modify|do|continue|"
+    r"proceed|build|make|start|finish|edit|delete|remove|rename|move|install|"
+    r"refactor|rewrite|test|verify|patch|apply|push|commit"
+)
+
+PROMISE_PATTERNS = [
+    re.compile(rf"\bi[\'’]ll\s+(?:{_ACTION_VERBS}|now)\b", re.IGNORECASE),
+    re.compile(rf"\bi will\s+(?:{_ACTION_VERBS}|now)\b", re.IGNORECASE),
+    re.compile(r"\bi[\'’]m going to\s+\w+", re.IGNORECASE),
+    re.compile(r"\bi am going to\s+\w+", re.IGNORECASE),
+    re.compile(rf"\blet me\s+(?:{_ACTION_VERBS})\b", re.IGNORECASE),
+    re.compile(rf"\bnow i[\'’]ll\s+(?:{_ACTION_VERBS})\b", re.IGNORECASE),
+    re.compile(r"(?:我来|我现在|我去|我马上|我先去|我接下来|让我来|让我去)"),
+]
+
+
+def looks_like_promise(text: str) -> bool:
+    """Heuristic: does this final-text response look like a verbal promise without follow-through?"""
+    if not text:
+        return False
+    s = text.strip()
+    if s.endswith(PROMISE_TAIL_CHARS):
+        return True
+    if len(s) > 250:
+        return False
+    for pat in PROMISE_PATTERNS:
+        if pat.search(s):
+            return True
+    return False
+
+
 def call_llm(client: OpenAI, messages: list[dict[str, Any]]):
     """Wrap chat.completions.create with a thinking indicator + usage stats."""
     print("[~] thinking...", end="", flush=True)
@@ -411,6 +450,7 @@ def call_llm(client: OpenAI, messages: list[dict[str, Any]]):
 
 def run_turn(client: OpenAI, messages: list[dict[str, Any]]) -> None:
     """Run inner tool-use loop until the assistant produces a final text reply."""
+    auto_continues = 0
     while True:
         resp = call_llm(client, messages)
         msg = resp.choices[0].message
@@ -428,7 +468,17 @@ def run_turn(client: OpenAI, messages: list[dict[str, Any]]) -> None:
         messages.append(assistant_msg)
 
         if not msg.tool_calls:
-            print(f"\n[CodeWu] {msg.content or '(empty)'}\n")
+            text = msg.content or ""
+            if auto_continues < MAX_AUTO_CONTINUE and looks_like_promise(text):
+                print(f"\n[CodeWu] {text}")
+                auto_continues += 1
+                print(f"[~] auto-continue: model paused on a promise ({auto_continues}/{MAX_AUTO_CONTINUE})")
+                messages.append({
+                    "role": "user",
+                    "content": "You stopped after a verbal promise without calling any tool. Call the tool now to perform the action you just announced. Do not stop until the work is done.",
+                })
+                continue
+            print(f"\n[CodeWu] {text or '(empty)'}\n")
             return
 
         for tc in msg.tool_calls:

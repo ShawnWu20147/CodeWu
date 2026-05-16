@@ -174,6 +174,13 @@ D:\git-nonwork\CodeWu\
   - 新增 `--allow-all` CLI flag：跳过 y/n 提示但保留 preview，banner 显眼 ⚠ 警告
   - 顺手修了 `approve_or_skip` 中 `edit` 命令后 `cmd` 变量未刷新的小 bug
 - 2026-05-16 提交 git + 推送 `https://github.com/ShawnWu20147/CodeWu`（commit 18bbff5）
+- 2026-05-16 v1.5 v1.4 prompt 不够强，「promise then stop」复发后驱动：
+  - **新增代码层 auto-continue 兜底**：`looks_like_promise(text)` 启发式 + `run_turn` 检测到无 tool_call 且文本看起来是「半路承诺」时，注入 user 消息 "Call the tool now to perform the action you just announced" 再次调用 LLM，上限 3 次/turn
+  - 启发式两路：(a) 结尾是 `:` `：` `...` `。。。` `—` 任一字符；(b) 文本 ≤ 250 字符且含「I'll/I will/let me + 动作动词」regex 或「我来/我现在/我去/我马上/我接下来/让我来」中文短语
+  - 用 regex 收紧 `let me`：仅 `let me fix/update/add/...` 算 promise，避免 `let me know` / `let me see` 误报（14/14 单元测试通过）
+  - 触发时终端打印 `[~] auto-continue: model paused on a promise (n/3)`
+  - SYSTEM_PROMPT 加铁律：「NEVER end a response with `:`, `：`, `...`, or `。。。`」
+  - 端到端：英文复现 yongshen footer 年份场景，模型一路 read→write→verify→done 完成，未触发 auto-continue（说明 prompt 强化本身已经够多数情况）；auto-continue 留作罕见情况安全网
 - 2026-05-16 v1.4 用户四次反馈后驱动：
   - **`SESSION_DIR` 移到 `~/.codewu/sessions/`** 全局存储；session JSON 加 `cwd` 字段；`/sessions` 显示 `session_id | cwd | first message` 三列对齐
   - **不自动迁移旧 `<cwd>/.codewu/`**——存在的让用户自己处理
