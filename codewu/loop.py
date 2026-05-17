@@ -13,11 +13,37 @@ import re
 import time
 from typing import Any
 
-from openai import OpenAI
+import httpx
+from openai import (
+    APIConnectionError,
+    APITimeoutError,
+    InternalServerError,
+    OpenAI,
+    RateLimitError,
+)
 
+from . import config
 from . import ui
 from .config import MODEL
 from .tools import TOOLS_SCHEMA, dispatch_tool
+
+
+# Exception types that indicate a transient network / proxy hiccup and are
+# worth retrying with backoff. Anything else (bad request, auth, etc.) we let
+# propagate immediately so the caller can roll back.
+_RETRYABLE_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    httpx.RemoteProtocolError,
+    httpx.ReadError,
+    httpx.ReadTimeout,
+    httpx.ConnectError,
+    httpx.ConnectTimeout,
+    httpx.WriteError,
+    APIConnectionError,
+    APITimeoutError,
+    RateLimitError,
+    InternalServerError,
+    ConnectionError,
+)
 
 
 MAX_AUTO_CONTINUE = 3
@@ -71,11 +97,11 @@ def looks_like_promise(text: str) -> bool:
 _THINKING_CLEAR = "\r" + " " * 30 + "\r"
 
 
-def call_llm_stream(client: OpenAI, messages: list[dict[str, Any]]) -> dict[str, Any]:
-    """Stream the LLM response, printing content live and accumulating tool_calls.
+def _stream_once(client: OpenAI, messages: list[dict[str, Any]]) -> dict[str, Any]:
+    """One attempt at streaming the LLM response.
 
-    Returns the assembled assistant message dict (role, content, optional tool_calls).
-    UX:
+    Raises on any error — including transient network errors. The retrying
+    wrapper `call_llm_stream` decides whether to retry. UX:
       1. Print "[~] thinking..." immediately so the user sees activity.
       2. On the first chunk with content, erase that line, print "[CodeWu] "
          and stream subsequent tokens inline.
@@ -90,83 +116,69 @@ def call_llm_stream(client: OpenAI, messages: list[dict[str, Any]]) -> dict[str,
     content_buf: list[str] = []
     tool_calls_by_idx: dict[int, dict[str, Any]] = {}
     usage = None
-    # "thinking" until first chunk; "content" once we start streaming text;
-    # "tool" once we have printed at least one [~] calling tool: <name> label.
-    label_state = "thinking"
+    label_state = "thinking"  # "thinking" → "content" → "tool"
 
     def clear_thinking() -> None:
         print(_THINKING_CLEAR, end="", flush=True)
 
-    try:
-        stream = client.chat.completions.create(
-            model=MODEL,
-            messages=messages,
-            tools=TOOLS_SCHEMA,
-            tool_choice="auto",
-            stream=True,
-        )
-        for chunk in stream:
-            # Usage may ride on a final chunk; some proxies put it on a choice-less chunk.
-            if getattr(chunk, "usage", None) is not None:
-                usage = chunk.usage
-            if not chunk.choices:
-                continue
-            delta = chunk.choices[0].delta
+    stream = client.chat.completions.create(
+        model=MODEL,
+        messages=messages,
+        tools=TOOLS_SCHEMA,
+        tool_choice="auto",
+        stream=True,
+    )
+    for chunk in stream:
+        if getattr(chunk, "usage", None) is not None:
+            usage = chunk.usage
+        if not chunk.choices:
+            continue
+        delta = chunk.choices[0].delta
 
-            # --- content tokens ---
-            if delta.content:
-                if label_state == "thinking":
-                    clear_thinking()
-                    print(ui.style("[CodeWu]", ui.BOLD, ui.CYAN), end=" ", flush=True)
-                    label_state = "content"
-                print(delta.content, end="", flush=True)
-                content_buf.append(delta.content)
+        if delta.content:
+            if label_state == "thinking":
+                clear_thinking()
+                print(ui.style("[CodeWu]", ui.BOLD, ui.CYAN), end=" ", flush=True)
+                label_state = "content"
+            print(delta.content, end="", flush=True)
+            content_buf.append(delta.content)
 
-            # --- tool_calls deltas (accumulate by index) ---
-            if delta.tool_calls:
-                for tc in delta.tool_calls:
-                    idx = tc.index
-                    if idx not in tool_calls_by_idx:
-                        tool_calls_by_idx[idx] = {
-                            "id": "",
-                            "type": "function",
-                            "function": {"name": "", "arguments": ""},
-                        }
-                    rec = tool_calls_by_idx[idx]
-                    if getattr(tc, "id", None):
-                        rec["id"] = tc.id
-                    if getattr(tc, "type", None):
-                        rec["type"] = tc.type
-                    if tc.function is not None:
-                        if getattr(tc.function, "name", None):
-                            rec["function"]["name"] = tc.function.name
-                            # First time we see a name for this tool_call → print its label.
-                            if label_state == "thinking":
-                                clear_thinking()
-                            elif label_state == "content":
-                                print()  # newline to separate from streamed text
-                            label_state = "tool"
-                            meta = (
-                                ui.style("[~] calling tool: ", ui.DIM)
-                                + ui.style(tc.function.name, ui.YELLOW)
-                            )
-                            print(meta)
-                        if getattr(tc.function, "arguments", None):
-                            rec["function"]["arguments"] += tc.function.arguments
-    except Exception:
-        print("\r" + ui.style("[~] (stream error)         ", ui.BOLD, ui.RED), flush=True)
-        raise
+        if delta.tool_calls:
+            for tc in delta.tool_calls:
+                idx = tc.index
+                if idx not in tool_calls_by_idx:
+                    tool_calls_by_idx[idx] = {
+                        "id": "",
+                        "type": "function",
+                        "function": {"name": "", "arguments": ""},
+                    }
+                rec = tool_calls_by_idx[idx]
+                if getattr(tc, "id", None):
+                    rec["id"] = tc.id
+                if getattr(tc, "type", None):
+                    rec["type"] = tc.type
+                if tc.function is not None:
+                    if getattr(tc.function, "name", None):
+                        rec["function"]["name"] = tc.function.name
+                        if label_state == "thinking":
+                            clear_thinking()
+                        elif label_state == "content":
+                            print()
+                        label_state = "tool"
+                        meta = (
+                            ui.style("[~] calling tool: ", ui.DIM)
+                            + ui.style(tc.function.name, ui.YELLOW)
+                        )
+                        print(meta)
+                    if getattr(tc.function, "arguments", None):
+                        rec["function"]["arguments"] += tc.function.arguments
 
     elapsed = time.monotonic() - t0
-
-    # If we streamed content, terminate that line with a newline.
     if label_state == "content":
         print()
-    # If the stream produced absolutely nothing visible, clear "thinking" + note empty.
     if label_state == "thinking" and not content_buf and not tool_calls_by_idx:
         clear_thinking()
         print(ui.style("[CodeWu]", ui.BOLD, ui.CYAN) + " (empty)")
-
     if usage is not None:
         stats = f"{usage.prompt_tokens}→{usage.completion_tokens} tokens, {elapsed:.1f}s"
     else:
@@ -182,6 +194,42 @@ def call_llm_stream(client: OpenAI, messages: list[dict[str, Any]]) -> dict[str,
             tool_calls_by_idx[i] for i in sorted(tool_calls_by_idx.keys())
         ]
     return assistant_msg
+
+
+def call_llm_stream(client: OpenAI, messages: list[dict[str, Any]]) -> dict[str, Any]:
+    """Retrying wrapper around _stream_once.
+
+    On a transient network/proxy error (httpx.RemoteProtocolError etc., or the
+    openai SDK's connection/timeout/5xx/429 wrappers) we sleep with exponential
+    backoff (1s, 2s, 4s, …) and try the same chat.completions.create again,
+    up to `config.LLM_MAX_RETRIES` extra attempts. Non-retryable errors (auth,
+    bad request, etc.) propagate immediately. After all retries fail, the
+    last exception is re-raised so the outer turn loop can roll back cleanly.
+    """
+    max_retries = config.LLM_MAX_RETRIES
+    for attempt in range(max_retries + 1):
+        try:
+            return _stream_once(client, messages)
+        except _RETRYABLE_EXCEPTIONS as e:
+            # Make sure we are on a fresh line before printing the error.
+            print()
+            err_line = ui.style(
+                f"[!] stream error: {type(e).__name__}: {str(e)[:120]}",
+                ui.BOLD, ui.RED,
+            )
+            print(err_line)
+            if attempt >= max_retries:
+                print(ui.style(
+                    f"    giving up after {attempt + 1} attempt(s)",
+                    ui.DIM,
+                ))
+                raise
+            backoff = 2 ** attempt  # 1, 2, 4, 8...
+            print(ui.style(
+                f"    retrying in {backoff}s ({attempt + 1}/{max_retries})",
+                ui.DIM,
+            ))
+            time.sleep(backoff)
 
 
 def run_turn(client: OpenAI, messages: list[dict[str, Any]]) -> None:

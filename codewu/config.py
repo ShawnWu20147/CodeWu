@@ -50,6 +50,7 @@ _DEFAULTS: dict[str, Any] = {
     "history": True,
     "history_file": str(DEFAULT_HISTORY_FILE),
     "default_cmd_timeout_sec": 60,
+    "llm_max_retries": 3,
 }
 
 
@@ -170,6 +171,12 @@ DEFAULT_CMD_TIMEOUT_SEC, DEFAULT_CMD_TIMEOUT_SEC_SRC = _resolve_int(
     _DEFAULTS["default_cmd_timeout_sec"],
 )
 
+LLM_MAX_RETRIES, LLM_MAX_RETRIES_SRC = _resolve_int(
+    "CODEWU_LLM_MAX_RETRIES",
+    "llm_max_retries",
+    _DEFAULTS["llm_max_retries"],
+)
+
 
 def config_summary() -> list[tuple[str, str, str]]:
     """List of (key, displayed_value, source) for the /config command.
@@ -192,6 +199,7 @@ def config_summary() -> list[tuple[str, str, str]]:
         ("history", history_display, HISTORY_ENABLED_SRC),
         ("history_file", history_file_display, HISTORY_FILE_SRC if HISTORY_ENABLED else "—"),
         ("default_cmd_timeout_sec", f"{DEFAULT_CMD_TIMEOUT_SEC}s", DEFAULT_CMD_TIMEOUT_SEC_SRC),
+        ("llm_max_retries", str(LLM_MAX_RETRIES), LLM_MAX_RETRIES_SRC),
     ]
 
 

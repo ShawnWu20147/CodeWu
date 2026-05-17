@@ -189,6 +189,19 @@ D:\git-nonwork\CodeWu\
   - 新增 `--allow-all` CLI flag：跳过 y/n 提示但保留 preview，banner 显眼 ⚠ 警告
   - 顺手修了 `approve_or_skip` 中 `edit` 命令后 `cmd` 变量未刷新的小 bug
 - 2026-05-16 提交 git + 推送 `https://github.com/ShawnWu20147/CodeWu`（commit 18bbff5）
+- 2026-05-17 v1.17 流式失败自动重试（exponential backoff）：
+  - 用户反馈：`RemoteProtocolError: peer closed connection without sending complete message body` 经常撞到，体验差
+  - 根因：4141 反代偶发中途断流，OpenAI SDK 的内置重试不覆盖**已开始**的 stream，直接抛
+  - `loop.py` 拆 `_stream_once`（裸调用）+ `call_llm_stream` 重试包装：
+    - 可重试异常：`httpx.RemoteProtocolError` / `ReadError` / `ReadTimeout` / `ConnectError` / `ConnectTimeout` / `WriteError`、`openai.APIConnectionError` / `APITimeoutError` / `RateLimitError` / `InternalServerError`、Python `ConnectionError`
+    - 不重试：4xx (BadRequest / Auth) 直接抛，让外层 turn loop 回滚
+    - Backoff schedule：1s / 2s / 4s / 8s（`2^attempt`）
+  - 默认重试 3 次（共 4 attempts，最坏 1+2+4=7s 总额外等待）
+  - 新 config 键 `llm_max_retries` (default 3) + env `CODEWU_LLM_MAX_RETRIES`
+  - 重试时显式打 red `[!] stream error: <Type>: <msg>` + dim `retrying in Xs (n/max)`，给完最后告 `giving up after N attempt(s)`
+  - 重试期间 partial output 已经在屏幕上——用户看到「半截内容 + retry 提示 + 完整重来内容」，比直接死掉好
+  - 单测覆盖：2-fail-then-succeed (3 attempts, 3.0s 精确)、all-fail give-up (3 attempts, 3.0s 精确)
+  - Sync `__version__` 0.1.16 → 0.1.17
 - 2026-05-17 v1.16 Windows 超时改用 `taskkill /F /T` 杀进程树：
   - 用户反馈：CodeWu 自己 timeout 触发的 kill 失败，孙进程（PowerShell → npm.cmd → node.exe → workers）在 task manager 里仍然活着
   - 根因：Python `Popen.kill()` 在 Windows 上调 `TerminateProcess` 只杀直接子进程，不递归。所以我们的 PowerShell 死了但它派生出的 node/npm 进程变孤儿继续跑
