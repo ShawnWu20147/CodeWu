@@ -189,6 +189,18 @@ D:\git-nonwork\CodeWu\
   - 新增 `--allow-all` CLI flag：跳过 y/n 提示但保留 preview，banner 显眼 ⚠ 警告
   - 顺手修了 `approve_or_skip` 中 `edit` 命令后 `cmd` 变量未刷新的小 bug
 - 2026-05-16 提交 git + 推送 `https://github.com/ShawnWu20147/CodeWu`（commit 18bbff5）
+- 2026-05-17 v1.19 non-stream 兜底 + 失败也写 session（用户实测后驱动）：
+  - **现象**：`RemoteProtocolError: peer closed connection without sending complete message body` 连续 3 次失败；用户去看 proxy log 全是 `200 OK`，每个请求 `output: 3` tokens——说明 proxy 看的是请求**开头**的状态码，body 中途 chunked encoding 被截 proxy 不感知
+  - **重试无用**：同样的 input → 同样的 truncated output。需要换路
+  - **新增 `_call_once_nonstream(client, messages)`**：`stream=False`，一次性收完 response 后打印 `[CodeWu] content` + `[~] calling tool: name` labels + 用量条（带 `(non-stream)` 后缀）；返回 dict 形状与 `_stream_once` 一致，对 `run_turn` 透明
+  - **`call_llm_stream` 重构**：前 N 次走 stream（N = `LLM_MAX_RETRIES`，default 3），**最后一次走 nonstream 兜底**；非 retryable 异常仍立即抛
+  - Give-up 诊断升级：提示「200 ≠ body 完整」+ 三大可能原因（content filter / rate limit / proxy tool_call 流式 bug）+ 三个 actionable 建议（/new、缩短消息、`CODEWU_LLM_MAX_RETRIES=0` fail fast）
+  - **用户第二个观察**：失败后 session 文件**看不到 user 消息**——原 cli.py exception 分支 `del messages[user_msg_idx:]` 强行回滚 + **不 save_session**
+  - 原因：早期怕 partial 状态（assistant tool_calls 没收齐 results）；但 v1.17 retry 落地后 `call_llm_stream` 全失败时是 raise 在 append 前——messages 实际是 clean state
+  - **修法**：cli.py 加 `_clean_orphan_tool_calls(messages)` 辅助：从末尾扫，仅当最后 assistant 的 tool_calls 有未匹配 result 时才 `del messages[i:]`；其他情况不动
+  - 两个 except 分支都先 cleanup 再 **save_session**：user 消息保留下来；`/sessions` 列表显示这条 session；`/resume <id>` 后 `print_history` 看得到你打过什么
+  - 单测覆盖：(a) 2 stream fail + nonstream succeed → 3.0s 准时；(b) all-fail give-up → 3.0s + 完整 diagnostic 输出；(c) orphan cleanup valid/partial/final-text 三种状态分别正确处理
+  - Sync `__version__` 0.1.18 → 0.1.19
 - 2026-05-17 v1.18 后台进程支持（dev server 不再被 timeout 杀）：
   - 用户实测：模型跑 `npx react-scripts start` 编译完毕、dev server up，60s 后却被 timeout-kill 掉，没法接着开浏览器查看
   - 模型试图用 `Start-Process powershell -ArgumentList '-NoExit', ...` 弹独立 PowerShell 窗口绕过——hack 不优雅且不可控

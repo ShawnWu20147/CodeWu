@@ -196,37 +196,136 @@ def _stream_once(client: OpenAI, messages: list[dict[str, Any]]) -> dict[str, An
     return assistant_msg
 
 
-def call_llm_stream(client: OpenAI, messages: list[dict[str, Any]]) -> dict[str, Any]:
-    """Retrying wrapper around _stream_once.
+def _call_once_nonstream(client: OpenAI, messages: list[dict[str, Any]]) -> dict[str, Any]:
+    """Single non-streaming attempt. Used as the FINAL fallback after the
+    streaming retries are exhausted.
 
-    On a transient network/proxy error (httpx.RemoteProtocolError etc., or the
-    openai SDK's connection/timeout/5xx/429 wrappers) we sleep with exponential
-    backoff (1s, 2s, 4s, …) and try the same chat.completions.create again,
-    up to `config.LLM_MAX_RETRIES` extra attempts. Non-retryable errors (auth,
-    bad request, etc.) propagate immediately. After all retries fail, the
-    last exception is re-raised so the outer turn loop can roll back cleanly.
+    Why: some proxies hand back 200 OK and then break the chunked encoding
+    mid-body (we've seen `peer closed connection without sending complete
+    message body` even when the proxy's own log shows 200 every time).
+    Non-streaming gets the response as one atomic blob, which sometimes
+    succeeds where streaming repeatedly fails — especially for responses
+    that consist mostly of tool_call deltas.
     """
-    max_retries = config.LLM_MAX_RETRIES
-    for attempt in range(max_retries + 1):
+    print(ui.style("[~] thinking... (non-stream fallback)", ui.DIM), end="", flush=True)
+    t0 = time.monotonic()
+
+    resp = client.chat.completions.create(
+        model=MODEL,
+        messages=messages,
+        tools=TOOLS_SCHEMA,
+        tool_choice="auto",
+        # stream defaults to False here
+    )
+
+    elapsed = time.monotonic() - t0
+    msg = resp.choices[0].message
+    usage = getattr(resp, "usage", None)
+
+    # Erase the "thinking..." line.
+    print(_THINKING_CLEAR, end="", flush=True)
+
+    content = msg.content or ""
+    has_content = bool(content)
+    has_tool_calls = bool(msg.tool_calls)
+
+    if has_content:
+        print(ui.style("[CodeWu]", ui.BOLD, ui.CYAN) + f" {content}")
+    elif not has_tool_calls:
+        print(ui.style("[CodeWu]", ui.BOLD, ui.CYAN) + " (empty)")
+
+    if has_tool_calls:
+        for tc in msg.tool_calls:
+            meta = (
+                ui.style("[~] calling tool: ", ui.DIM)
+                + ui.style(tc.function.name, ui.YELLOW)
+            )
+            print(meta)
+
+    if usage is not None:
+        stats = f"{usage.prompt_tokens}→{usage.completion_tokens} tokens, {elapsed:.1f}s (non-stream)"
+    else:
+        stats = f"{elapsed:.1f}s (non-stream)"
+    print(ui.style(f"[~] {stats}", ui.DIM))
+
+    assistant_msg: dict[str, Any] = {
+        "role": "assistant",
+        "content": content if has_content else None,
+    }
+    if msg.tool_calls:
+        assistant_msg["tool_calls"] = [
+            {
+                "id": tc.id,
+                "type": "function",
+                "function": {"name": tc.function.name, "arguments": tc.function.arguments},
+            }
+            for tc in msg.tool_calls
+        ]
+    return assistant_msg
+
+
+def call_llm_stream(client: OpenAI, messages: list[dict[str, Any]]) -> dict[str, Any]:
+    """Retrying wrapper. First N attempts go through `_stream_once`; if they
+    all fail with retryable errors, ONE final attempt goes through
+    `_call_once_nonstream`. Non-retryable errors propagate immediately so we
+    don't waste backoff on user-fixable bugs (auth, bad request, etc.). When
+    every attempt has failed, the last exception is re-raised; the give-up
+    message includes a short diagnostic with actionable suggestions.
+    """
+    max_retries = max(0, config.LLM_MAX_RETRIES)
+
+    # If retries are disabled, do a single streaming attempt with no fallback.
+    if max_retries == 0:
+        return _stream_once(client, messages)
+
+    # Otherwise: max_retries stream attempts, then 1 non-stream fallback.
+    total_attempts = max_retries + 1
+
+    for attempt in range(total_attempts):
+        is_final = (attempt == total_attempts - 1)
+        mode_label = "non-stream fallback" if is_final else "stream"
         try:
+            if is_final:
+                print(ui.style(
+                    "[~] stream retries exhausted — trying non-streaming once",
+                    ui.BOLD, ui.YELLOW,
+                ))
+                return _call_once_nonstream(client, messages)
             return _stream_once(client, messages)
         except _RETRYABLE_EXCEPTIONS as e:
-            # Make sure we are on a fresh line before printing the error.
             print()
-            err_line = ui.style(
-                f"[!] stream error: {type(e).__name__}: {str(e)[:120]}",
+            print(ui.style(
+                f"[!] {mode_label} error: {type(e).__name__}: {str(e)[:120]}",
                 ui.BOLD, ui.RED,
-            )
-            print(err_line)
-            if attempt >= max_retries:
+            ))
+
+            if is_final:
+                # Both streaming and non-streaming have failed.
                 print(ui.style(
-                    f"    giving up after {attempt + 1} attempt(s)",
+                    f"    giving up after {total_attempts} attempts "
+                    f"({max_retries} stream + 1 non-stream)",
+                    ui.DIM,
+                ))
+                print(ui.style(
+                    "    Note: a 200 status in the proxy log only confirms the request started — "
+                    "the chunked-encoded body can still be truncated.",
+                    ui.DIM,
+                ))
+                print(ui.style("    Probable causes:", ui.DIM))
+                print(ui.style("      - upstream content filter / refusal", ui.DIM))
+                print(ui.style("      - upstream rate limit or transient error", ui.DIM))
+                print(ui.style("      - proxy bug handling streamed tool_call deltas", ui.DIM))
+                print(ui.style(
+                    "    Try /new to start fresh, shorten/rephrase the last message, "
+                    "or temporarily set CODEWU_LLM_MAX_RETRIES=0 to fail fast.",
                     ui.DIM,
                 ))
                 raise
-            backoff = 2 ** attempt  # 1, 2, 4, 8...
+
+            backoff = 2 ** attempt
+            next_mode = "non-stream" if (attempt + 1) == total_attempts - 1 else "stream"
             print(ui.style(
-                f"    retrying in {backoff}s ({attempt + 1}/{max_retries})",
+                f"    retrying in {backoff}s as {next_mode} ({attempt + 1}/{max_retries})",
                 ui.DIM,
             ))
             time.sleep(backoff)

@@ -38,6 +38,34 @@ from .slash import handle_slash, print_exit_hint
 from .tools import tool_run_cmd
 
 
+def _clean_orphan_tool_calls(messages: list[dict[str, Any]]) -> bool:
+    """If the trailing assistant message announced tool_calls but not all of
+    them got a matching tool result (e.g. Ctrl+C or EOFError fired mid-dispatch),
+    remove that assistant + any partial tool messages so the message list is a
+    valid input to the next chat.completions.create call.
+
+    Returns True if anything was cleaned, False otherwise.
+    """
+    for i in range(len(messages) - 1, -1, -1):
+        m = messages[i]
+        role = m.get("role")
+        if role == "assistant" and m.get("tool_calls"):
+            expected = {tc.get("id", "") for tc in m["tool_calls"]}
+            actual = {
+                t.get("tool_call_id", "")
+                for t in messages[i + 1:]
+                if t.get("role") == "tool"
+            }
+            if expected - actual:
+                del messages[i:]
+                return True
+            return False
+        if role not in ("tool", "assistant"):
+            # Hit a user or system message — earlier state is stable.
+            return False
+    return False
+
+
 def handle_bang(line: str, messages: list[dict[str, Any]]) -> None:
     """Run a shell command directly and append its output to the conversation.
 
@@ -171,17 +199,27 @@ def main() -> int:
         if attached:
             print(ui.style(f"[~] attached: {attached_summary(attached)}", ui.DIM))
 
-        user_msg_idx = len(messages)
         messages.append({"role": "user", "content": expanded})
         try:
             run_turn(client, messages)
         except KeyboardInterrupt:
-            del messages[user_msg_idx:]
-            print(ui.style("\n[!] turn interrupted — rolled back to before this user message", ui.BOLD, ui.YELLOW))
+            # Ctrl+C may have fired mid-dispatch (between assistant tool_calls
+            # and their tool_results). Clean up so the saved state stays valid.
+            # The user's message is preserved so /resume shows what they tried.
+            cleaned = _clean_orphan_tool_calls(messages)
+            extra = " (cleaned up an incomplete tool call)" if cleaned else ""
+            print(ui.style(f"\n[!] turn interrupted{extra}", ui.BOLD, ui.YELLOW))
+            save_session(session_id, messages)
             continue
         except Exception as e:
-            print(ui.style(f"[!] turn failed: {type(e).__name__}: {e}", ui.BOLD, ui.RED))
-            del messages[user_msg_idx:]
+            # call_llm_stream raises BEFORE appending its assistant_msg, so the
+            # message list is normally clean here — but EOFError from an
+            # approval input() etc. can also leak through, so we run the same
+            # cleanup defensively before saving.
+            cleaned = _clean_orphan_tool_calls(messages)
+            extra = " (cleaned up an incomplete tool call)" if cleaned else ""
+            print(ui.style(f"[!] turn failed: {type(e).__name__}: {e}{extra}", ui.BOLD, ui.RED))
+            save_session(session_id, messages)
             continue
         save_session(session_id, messages)
 
