@@ -187,6 +187,15 @@ D:\git-nonwork\CodeWu\
   - 新增 `--allow-all` CLI flag：跳过 y/n 提示但保留 preview，banner 显眼 ⚠ 警告
   - 顺手修了 `approve_or_skip` 中 `edit` 命令后 `cmd` 变量未刷新的小 bug
 - 2026-05-16 提交 git + 推送 `https://github.com/ShawnWu20147/CodeWu`（commit 18bbff5）
+- 2026-05-17 v1.7 v1.5 兜底再被绕过（session 20260517-085634-01c11f：「I已看完HTML内容。现在将其转换为Flask Python网页应用。」未被 heuristic 命中）：
+  - **SYSTEM_PROMPT 从 ~25 行扩到 ~100 行**，结构化分章：ROLE / ENVIRONMENT / TOOLS / TURN DISCIPLINE / EXECUTION STYLE / ERROR RECOVERY
+  - TURN DISCIPLINE 章节直接引用**真实失败原文作为反例**（含本次 session 那一句、上次 yongshen footer 那一句等），并给出 CORRECT PATTERN 对照
+  - STYLE 章节加 5 条具体规则：terse / no preamble / no apology / no recap / explore-before-change + verify-after-change
+  - ERROR RECOVERY 章节加 4 条：读错误别盲重试、文件找不到 list_dir、cmd 失败查 stderr、两次失败换方法
+  - **`looks_like_promise` 新增 4 类中文 future-tense 模式**：`现在(?:我|我们)?(?:将|就|要|来|去|开始|准备|马上|会)`、`接下来(?:我|我们)?(?:将|要|会|来|准备|开始|是)`、`下一步(?:我|我们)?...`、`马上(?:我|我们)?...`；加英文 `now,?\s+I'll` / `next,?\s+I'll` 两条
+  - 单元测试 23/23 通过（含本次失败原文 + 7 个新中文模式 + 9 个负例回归）
+  - prompt token 从 ~1.3K 涨到 ~2.8K，每轮成本上升约 2x，可接受
+  - API 层「显式 done 信号」（response_format=json）未采用：与 tool_choice 互斥风险、反代支持未知、协议复杂度大；继续走「prompt + heuristic 双保险」路线
 - 2026-05-17 v1.6 用户要求重构 + UX 增强：
   - **单文件 codewu.py（~755 行）拆为 codewu/ 包，10 个模块**：__init__、__main__、cli、config、ui、tools、approval、session、slash、loop；依赖 DAG 无环
   - `pyproject.toml`：`py-modules = ["codewu"]` → `packages = ["codewu"]`；入口 `codewu = "codewu.cli:main"`；新增 `python -m codewu` 入口

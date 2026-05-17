@@ -33,13 +33,23 @@ _ACTION_VERBS = (
 )
 
 PROMISE_PATTERNS = [
+    # English: I'll / I will / I'm going to + action verb
     re.compile(rf"\bi[\'’]ll\s+(?:{_ACTION_VERBS}|now)\b", re.IGNORECASE),
     re.compile(rf"\bi will\s+(?:{_ACTION_VERBS}|now)\b", re.IGNORECASE),
     re.compile(r"\bi[\'’]m going to\s+\w+", re.IGNORECASE),
     re.compile(r"\bi am going to\s+\w+", re.IGNORECASE),
     re.compile(rf"\blet me\s+(?:{_ACTION_VERBS})\b", re.IGNORECASE),
-    re.compile(rf"\bnow i[\'’]ll\s+(?:{_ACTION_VERBS})\b", re.IGNORECASE),
+    # English: leading temporal adverb + future
+    re.compile(r"\bnow,?\s+i[\'’]?(?:ll| will)\b", re.IGNORECASE),
+    re.compile(r"\bnext,?\s+i[\'’]?(?:ll| will)\b", re.IGNORECASE),
+    # Chinese: explicit first-person future promises
     re.compile(r"(?:我来|我现在|我去|我马上|我先去|我接下来|让我来|让我去)"),
+    # Chinese: temporal adverb (+ optional "我"/"我们") + future-tense particle.
+    # Catches "现在将其转换...", "接下来我会写入...", "下一步要改...", etc.
+    re.compile(r"现在(?:我|我们)?(?:将|就|要|来|去|开始|准备|马上|会)"),
+    re.compile(r"接下来(?:我|我们)?(?:将|要|会|来|准备|开始|是)"),
+    re.compile(r"下一步(?:我|我们)?(?:将|要|会|是|准备|开始)"),
+    re.compile(r"马上(?:我|我们)?(?:将|就|要|会|来|去|开始)"),
 ]
 
 
