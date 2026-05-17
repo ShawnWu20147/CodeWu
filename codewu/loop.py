@@ -1,9 +1,9 @@
-"""LLM call wrapper, the tool-use inner loop, and the auto-continue safety net.
+"""LLM call wrapper (streaming), the tool-use inner loop, auto-continue safety net.
 
-`run_turn` keeps looping: every iteration calls the LLM, then either dispatches
-the tool_calls it requested OR (if no tool_calls but the text looks like a
-verbal promise) injects a continue-nudge and loops again. Bounded by
-MAX_AUTO_CONTINUE.
+`run_turn` keeps looping: every iteration calls the LLM (streaming the response
+live to the terminal), then either dispatches the tool_calls it requested OR
+(if no tool_calls but the text looks like a verbal promise) injects a
+continue-nudge and loops again. Bounded by MAX_AUTO_CONTINUE.
 """
 
 from __future__ import annotations
@@ -68,55 +68,136 @@ def looks_like_promise(text: str) -> bool:
     return False
 
 
-def call_llm(client: OpenAI, messages: list[dict[str, Any]]):
-    """Wrap chat.completions.create with a thinking indicator + usage stats."""
+_THINKING_CLEAR = "\r" + " " * 30 + "\r"
+
+
+def call_llm_stream(client: OpenAI, messages: list[dict[str, Any]]) -> dict[str, Any]:
+    """Stream the LLM response, printing content live and accumulating tool_calls.
+
+    Returns the assembled assistant message dict (role, content, optional tool_calls).
+    UX:
+      1. Print "[~] thinking..." immediately so the user sees activity.
+      2. On the first chunk with content, erase that line, print "[CodeWu] "
+         and stream subsequent tokens inline.
+      3. On the first chunk with a tool_call (with a name), erase "thinking"
+         and print "[~] calling tool: <name>". Arguments stream silently into
+         the accumulator and are dispatched whole at the end.
+      4. After the stream finishes, print a single "[~] N→M tokens, Xs" stats line.
+    """
     print(ui.style("[~] thinking...", ui.DIM), end="", flush=True)
     t0 = time.monotonic()
+
+    content_buf: list[str] = []
+    tool_calls_by_idx: dict[int, dict[str, Any]] = {}
+    usage = None
+    # "thinking" until first chunk; "content" once we start streaming text;
+    # "tool" once we have printed at least one [~] calling tool: <name> label.
+    label_state = "thinking"
+
+    def clear_thinking() -> None:
+        print(_THINKING_CLEAR, end="", flush=True)
+
     try:
-        resp = client.chat.completions.create(
+        stream = client.chat.completions.create(
             model=MODEL,
             messages=messages,
             tools=TOOLS_SCHEMA,
             tool_choice="auto",
+            stream=True,
         )
+        for chunk in stream:
+            # Usage may ride on a final chunk; some proxies put it on a choice-less chunk.
+            if getattr(chunk, "usage", None) is not None:
+                usage = chunk.usage
+            if not chunk.choices:
+                continue
+            delta = chunk.choices[0].delta
+
+            # --- content tokens ---
+            if delta.content:
+                if label_state == "thinking":
+                    clear_thinking()
+                    print(ui.style("[CodeWu]", ui.BOLD, ui.CYAN), end=" ", flush=True)
+                    label_state = "content"
+                print(delta.content, end="", flush=True)
+                content_buf.append(delta.content)
+
+            # --- tool_calls deltas (accumulate by index) ---
+            if delta.tool_calls:
+                for tc in delta.tool_calls:
+                    idx = tc.index
+                    if idx not in tool_calls_by_idx:
+                        tool_calls_by_idx[idx] = {
+                            "id": "",
+                            "type": "function",
+                            "function": {"name": "", "arguments": ""},
+                        }
+                    rec = tool_calls_by_idx[idx]
+                    if getattr(tc, "id", None):
+                        rec["id"] = tc.id
+                    if getattr(tc, "type", None):
+                        rec["type"] = tc.type
+                    if tc.function is not None:
+                        if getattr(tc.function, "name", None):
+                            rec["function"]["name"] = tc.function.name
+                            # First time we see a name for this tool_call → print its label.
+                            if label_state == "thinking":
+                                clear_thinking()
+                            elif label_state == "content":
+                                print()  # newline to separate from streamed text
+                            label_state = "tool"
+                            meta = (
+                                ui.style("[~] calling tool: ", ui.DIM)
+                                + ui.style(tc.function.name, ui.YELLOW)
+                            )
+                            print(meta)
+                        if getattr(tc.function, "arguments", None):
+                            rec["function"]["arguments"] += tc.function.arguments
     except Exception:
-        print("\r" + ui.style("[~] (error)         ", ui.RED), flush=True)
+        print("\r" + ui.style("[~] (stream error)         ", ui.BOLD, ui.RED), flush=True)
         raise
+
     elapsed = time.monotonic() - t0
-    usage = getattr(resp, "usage", None)
+
+    # If we streamed content, terminate that line with a newline.
+    if label_state == "content":
+        print()
+    # If the stream produced absolutely nothing visible, clear "thinking" + note empty.
+    if label_state == "thinking" and not content_buf and not tool_calls_by_idx:
+        clear_thinking()
+        print(ui.style("[CodeWu]", ui.BOLD, ui.CYAN) + " (empty)")
+
     if usage is not None:
         stats = f"{usage.prompt_tokens}→{usage.completion_tokens} tokens, {elapsed:.1f}s"
     else:
         stats = f"{elapsed:.1f}s"
-    # \r overwrites "thinking..." on the same line, padding to clear trailing chars
-    print("\r" + ui.style(f"[~] {stats}".ljust(48), ui.DIM), flush=True)
-    return resp
+    print(ui.style(f"[~] {stats}", ui.DIM))
+
+    assistant_msg: dict[str, Any] = {
+        "role": "assistant",
+        "content": "".join(content_buf) if content_buf else None,
+    }
+    if tool_calls_by_idx:
+        assistant_msg["tool_calls"] = [
+            tool_calls_by_idx[i] for i in sorted(tool_calls_by_idx.keys())
+        ]
+    return assistant_msg
 
 
 def run_turn(client: OpenAI, messages: list[dict[str, Any]]) -> None:
     """Drive the tool-use loop until the assistant produces a final text reply."""
     auto_continues = 0
     while True:
-        resp = call_llm(client, messages)
-        msg = resp.choices[0].message
-
-        assistant_msg: dict[str, Any] = {"role": "assistant", "content": msg.content}
-        if msg.tool_calls:
-            assistant_msg["tool_calls"] = [
-                {
-                    "id": tc.id,
-                    "type": "function",
-                    "function": {"name": tc.function.name, "arguments": tc.function.arguments},
-                }
-                for tc in msg.tool_calls
-            ]
+        assistant_msg = call_llm_stream(client, messages)
         messages.append(assistant_msg)
 
-        if not msg.tool_calls:
-            text = msg.content or ""
+        tool_calls = assistant_msg.get("tool_calls")
+
+        if not tool_calls:
+            text = assistant_msg.get("content") or ""
             if auto_continues < MAX_AUTO_CONTINUE and looks_like_promise(text):
-                label = ui.style("[CodeWu]", ui.BOLD, ui.CYAN)
-                print(f"\n{label} {text}")
+                # The text already streamed live; just print the auto-continue notice
+                # and inject the nudge user message.
                 auto_continues += 1
                 warn = ui.style(
                     f"[~] auto-continue: model paused on a promise ({auto_continues}/{MAX_AUTO_CONTINUE})",
@@ -128,17 +209,16 @@ def run_turn(client: OpenAI, messages: list[dict[str, Any]]) -> None:
                     "content": "You stopped after a verbal promise without calling any tool. Call the tool now to perform the action you just announced. Do not stop until the work is done.",
                 })
                 continue
-            label = ui.style("[CodeWu]", ui.BOLD, ui.CYAN)
-            print(f"\n{label} {text or '(empty)'}\n")
+            # Final response already on screen via streaming; nothing more to print.
             return
 
-        for tc in msg.tool_calls:
-            name = tc.function.name
-            meta = ui.style(f"[~] calling tool: ", ui.DIM) + ui.style(name, ui.YELLOW)
-            print(f"\n{meta}")
-            result = dispatch_tool(name, tc.function.arguments)
+        # Side-effect tool calls go through approve_or_skip inside dispatch_tool.
+        # The "[~] calling tool: <name>" label was already printed during streaming.
+        for tc in tool_calls:
+            name = tc["function"]["name"]
+            result = dispatch_tool(name, tc["function"]["arguments"])
             messages.append({
                 "role": "tool",
-                "tool_call_id": tc.id,
+                "tool_call_id": tc["id"],
                 "content": json.dumps(result, ensure_ascii=False),
             })

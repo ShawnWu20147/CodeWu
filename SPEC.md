@@ -119,7 +119,7 @@ D:\git-nonwork\CodeWu\
     ├── approval.py            # approve_or_skip + _preview_write
     ├── session.py             # save/load/list/new_session_id + print_history
     ├── slash.py               # SLASH_COMMANDS 注册表 + 各 handler
-    └── loop.py                # call_llm + run_turn + looks_like_promise + auto-continue
+    └── loop.py                # call_llm_stream (stream=True) + run_turn + looks_like_promise + auto-continue
 
 # 运行时数据（v1.4 起全局，跨 cwd 共享）：
 ~/.codewu/sessions/
@@ -187,6 +187,17 @@ D:\git-nonwork\CodeWu\
   - 新增 `--allow-all` CLI flag：跳过 y/n 提示但保留 preview，banner 显眼 ⚠ 警告
   - 顺手修了 `approve_or_skip` 中 `edit` 命令后 `cmd` 变量未刷新的小 bug
 - 2026-05-16 提交 git + 推送 `https://github.com/ShawnWu20147/CodeWu`（commit 18bbff5）
+- 2026-05-17 v1.8 用户要求加流式（v1.5 之前 `[~] thinking...` 静态条 UX 不够好）：
+  - 探测反代：`stream=true` 支持（haiku 实测 20+ 个 delta chunk）；tool_calls 按 `index` 拼接（name 在首块、arguments 增量追加）；usage 走最终 chunk；`thinking`/`reasoning` 参数被默吃、无独立 reasoning_content 字段 → 思维链单独 UI 不做
+  - `codewu/loop.py` 中 `call_llm` → `call_llm_stream`（stream=True）：
+    - 首 chunk 来时 `\r` 擦掉 `[~] thinking...`
+    - delta.content → 打印 `[CodeWu] ` label 一次，随后 token 实时打印
+    - delta.tool_calls → 按 `index` 累加到字典；首次见到 name 即打 `[~] calling tool: <name>`；args 静默累加直到 stream 结束才 dispatch
+    - 错误：捕获 stream 异常打印 `[~] (stream error)` 再 re-raise
+    - 用量条 `[~] N→M tokens, Xs` stream 结束后单独一行
+  - `run_turn` 适配：text 已 stream 完成不再重打 [CodeWu] label；auto-continue 触发也不重打 text（仅打 warn + 注入 nudge）；tool label 已在 stream 时打，不再重打
+  - 空响应边缘：content 与 tool_calls 都空 → 打印 `[CodeWu] (empty)` 占位
+  - 端到端：haiku 内容流式 + list_dir 工具流式两条都通；分隔线 / session 落盘 / 退出提示等保持
 - 2026-05-17 v1.7 v1.5 兜底再被绕过（session 20260517-085634-01c11f：「I已看完HTML内容。现在将其转换为Flask Python网页应用。」未被 heuristic 命中）：
   - **SYSTEM_PROMPT 从 ~25 行扩到 ~100 行**，结构化分章：ROLE / ENVIRONMENT / TOOLS / TURN DISCIPLINE / EXECUTION STYLE / ERROR RECOVERY
   - TURN DISCIPLINE 章节直接引用**真实失败原文作为反例**（含本次 session 那一句、上次 yongshen footer 那一句等），并给出 CORRECT PATTERN 对照
