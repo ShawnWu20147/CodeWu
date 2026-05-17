@@ -11,6 +11,8 @@ from __future__ import annotations
 import json
 import re
 import time
+from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -264,71 +266,129 @@ def _call_once_nonstream(client: OpenAI, messages: list[dict[str, Any]]) -> dict
     return assistant_msg
 
 
+_FAILED_REQUESTS_DIR = Path.home() / ".codewu" / "failed-requests"
+
+
+def _dump_failed_request(messages: list[dict[str, Any]], error_type: str, error_msg: str = "") -> Path | None:
+    """Dump the failing request payload to ~/.codewu/failed-requests/<ts>-<err>.json.
+
+    Lets the user share an exact reproducer so the failure can be replayed
+    offline against the same proxy. Best-effort: any IO error is swallowed.
+    """
+    try:
+        _FAILED_REQUESTS_DIR.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+        safe_err = re.sub(r"[^A-Za-z0-9]+", "-", error_type).strip("-") or "error"
+        path = _FAILED_REQUESTS_DIR / f"{ts}-{safe_err}.json"
+        payload = {
+            "timestamp": datetime.now().isoformat(timespec="seconds"),
+            "error_type": error_type,
+            "error_message": error_msg,
+            "model": MODEL,
+            "tools_count": len(TOOLS_SCHEMA),
+            "messages_count": len(messages),
+            "messages": messages,
+            "tools": TOOLS_SCHEMA,
+        }
+        path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        return path
+    except Exception:
+        return None
+
+
 def call_llm_stream(client: OpenAI, messages: list[dict[str, Any]]) -> dict[str, Any]:
-    """Retrying wrapper. First N attempts go through `_stream_once`; if they
-    all fail with retryable errors, ONE final attempt goes through
-    `_call_once_nonstream`. Non-retryable errors propagate immediately so we
-    don't waste backoff on user-fixable bugs (auth, bad request, etc.). When
-    every attempt has failed, the last exception is re-raised; the give-up
-    message includes a short diagnostic with actionable suggestions.
+    """Smart retry/fallback wrapper around _stream_once / _call_once_nonstream.
+
+    Strategy:
+      Phase A — first stream attempt.
+      Phase B — on RemoteProtocolError: skip backoff, immediately try
+                non-stream (RPE is deterministic for the same input, proxy
+                idle-timeout cuts long generations; retrying stream is
+                futile and wastes the user's time).
+      Phase C — on any other retryable error, or if Phase B also failed:
+                standard backoff retry loop, ending with one final
+                non-stream fallback.
+    On give-up, re-raise the last exception with an actionable diagnostic.
     """
     max_retries = max(0, config.LLM_MAX_RETRIES)
 
-    # If retries are disabled, do a single streaming attempt with no fallback.
     if max_retries == 0:
         return _stream_once(client, messages)
 
-    # Otherwise: max_retries stream attempts, then 1 non-stream fallback.
-    total_attempts = max_retries + 1
+    last_exc: BaseException | None = None
 
-    for attempt in range(total_attempts):
-        is_final = (attempt == total_attempts - 1)
-        mode_label = "non-stream fallback" if is_final else "stream"
+    # ---- Phase A: first stream attempt ------------------------------------
+    try:
+        return _stream_once(client, messages)
+    except httpx.RemoteProtocolError as e:
+        print()
+        print(ui.style(
+            "[!] stream error: RemoteProtocolError (proxy cut the chunked body mid-stream)",
+            ui.BOLD, ui.YELLOW,
+        ))
+        dumped = _dump_failed_request(messages, "RemoteProtocolError", str(e))
+        if dumped is not None:
+            print(ui.style(f"    dumped failing request → {dumped}", ui.DIM))
+        print(ui.style(
+            "    skipping backoff — RPE means the proxy SSE timeout fired on a slow "
+            "generation; retrying stream gives the same result. Trying non-stream now.",
+            ui.DIM,
+        ))
+        # ---- Phase B: immediate non-stream --------------------------------
+        try:
+            return _call_once_nonstream(client, messages)
+        except _RETRYABLE_EXCEPTIONS as e2:
+            print()
+            print(ui.style(
+                f"[!] non-stream also failed: {type(e2).__name__}: {str(e2)[:120]}",
+                ui.BOLD, ui.RED,
+            ))
+            last_exc = e2
+    except _RETRYABLE_EXCEPTIONS as e:
+        print()
+        print(ui.style(
+            f"[!] stream error: {type(e).__name__}: {str(e)[:120]}",
+            ui.BOLD, ui.RED,
+        ))
+        last_exc = e
+
+    # ---- Phase C: standard retry loop with backoff ------------------------
+    for attempt in range(max_retries):
+        backoff = 2 ** attempt
+        is_final = (attempt == max_retries - 1)
+        next_mode = "non-stream" if is_final else "stream"
+        print(ui.style(
+            f"    retrying in {backoff}s as {next_mode} ({attempt + 1}/{max_retries})",
+            ui.DIM,
+        ))
+        time.sleep(backoff)
         try:
             if is_final:
-                print(ui.style(
-                    "[~] stream retries exhausted — trying non-streaming once",
-                    ui.BOLD, ui.YELLOW,
-                ))
                 return _call_once_nonstream(client, messages)
             return _stream_once(client, messages)
         except _RETRYABLE_EXCEPTIONS as e:
+            last_exc = e
             print()
             print(ui.style(
-                f"[!] {mode_label} error: {type(e).__name__}: {str(e)[:120]}",
+                f"[!] {next_mode} error: {type(e).__name__}: {str(e)[:120]}",
                 ui.BOLD, ui.RED,
             ))
 
-            if is_final:
-                # Both streaming and non-streaming have failed.
-                print(ui.style(
-                    f"    giving up after {total_attempts} attempts "
-                    f"({max_retries} stream + 1 non-stream)",
-                    ui.DIM,
-                ))
-                print(ui.style(
-                    "    Note: a 200 status in the proxy log only confirms the request started — "
-                    "the chunked-encoded body can still be truncated.",
-                    ui.DIM,
-                ))
-                print(ui.style("    Probable causes:", ui.DIM))
-                print(ui.style("      - upstream content filter / refusal", ui.DIM))
-                print(ui.style("      - upstream rate limit or transient error", ui.DIM))
-                print(ui.style("      - proxy bug handling streamed tool_call deltas", ui.DIM))
-                print(ui.style(
-                    "    Try /new to start fresh, shorten/rephrase the last message, "
-                    "or temporarily set CODEWU_LLM_MAX_RETRIES=0 to fail fast.",
-                    ui.DIM,
-                ))
-                raise
-
-            backoff = 2 ** attempt
-            next_mode = "non-stream" if (attempt + 1) == total_attempts - 1 else "stream"
-            print(ui.style(
-                f"    retrying in {backoff}s as {next_mode} ({attempt + 1}/{max_retries})",
-                ui.DIM,
-            ))
-            time.sleep(backoff)
+    # ---- All attempts exhausted -------------------------------------------
+    print(ui.style(
+        f"    giving up after {max_retries + 2} attempts (1 stream + 1 nonstream + {max_retries} retries)",
+        ui.DIM,
+    ))
+    print(ui.style(
+        "    Probable cause: proxy SSE idle timeout on a slow generation. "
+        "Try /new to start fresh, shorten the message, or set CODEWU_LLM_MAX_RETRIES=0.",
+        ui.DIM,
+    ))
+    assert last_exc is not None
+    raise last_exc
 
 
 def run_turn(client: OpenAI, messages: list[dict[str, Any]]) -> None:

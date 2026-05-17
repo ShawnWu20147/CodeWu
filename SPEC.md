@@ -189,6 +189,19 @@ D:\git-nonwork\CodeWu\
   - 新增 `--allow-all` CLI flag：跳过 y/n 提示但保留 preview，banner 显眼 ⚠ 警告
   - 顺手修了 `approve_or_skip` 中 `edit` 命令后 `cmd` 变量未刷新的小 bug
 - 2026-05-16 提交 git + 推送 `https://github.com/ShawnWu20147/CodeWu`（commit 18bbff5）
+- 2026-05-17 v1.21 复现并理解 stream RemoteProtocolError 根因 + 快速 fallback：
+  - 用户贡献关键 log 显示**每次失败前都先打了 `[~] calling tool: write_file`**——说明 tool_call name 已 stream 过来，断点在 args 字段流式过程中
+  - nonstream 兜底成功后看到：3.2KB / 89 行 React 文件 + 1333 output tokens + 20.2s 完成
+  - **复现成功**：14793 input tokens 场景 5/5 失败、每次精确 12s 断；同样的请求降到 ~280 chars input 后稳定 9-10s 成功；用 httpx debug 看到 stream 中**模型在产 tool_call name 后停 8.22s 才开始流 args**（模型「内部 thinking」），偶尔停超过 ~10-12s 就被反代 SSE idle timeout 杀
+  - **根因**：反代有 ~10-15s 的 SSE idle timeout；模型在长 input 下首 token 慢 / 块间 gap 长，超过这个阈值就被关流；非流式接口没有这个限制（一次性发完）
+  - **决定性结论**：retry stream 没用——同样的 input 同样的 model latency 同样的失败，5/5 全跪
+  - **v1.21 实现 fast fallback**：拆三阶段：
+    - **Phase A**：第一次试 stream
+    - **Phase B**：若 `httpx.RemoteProtocolError` 触发 → **跳过 backoff** 立即试 nonstream（同样 input retry stream 是浪费时间）
+    - **Phase C**：其他 retryable 异常或 B 也失败 → 进入原 backoff retry 循环（保底）
+  - **`_dump_failed_request(messages, error_type, error_msg)`**：失败时把完整 payload (messages + tools + meta) 写入 `~/.codewu/failed-requests/<ts>-<err>.json`，让用户能贴文件给我离线 replay 诊断
+  - 端到端 5-run 实测：1 次 RPE 触发 fast fallback 成功（**省了 1+2+4 = 7s 退避**），dump 文件 35KB 含完整 payload
+  - Sync `__version__` 0.1.20 → 0.1.21
 - 2026-05-17 v1.20 session 按项目 (cwd) 子文件夹组织 + `--pick` 交互选 session：
   - 用户反馈 session 太松散；想要每个项目独立 + 启动时能挑选某个继续
   - **新文件布局**：`~/.codewu/sessions/<cwd-slug>/<session-id>.json`，每项目独立 `latest.json`
