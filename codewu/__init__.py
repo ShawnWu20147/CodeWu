@@ -3,7 +3,7 @@
 Public API: just `main`, exposed for the console script in pyproject.toml.
 """
 
-__version__ = "0.1.19"
+__version__ = "0.1.20"
 
 from .cli import main
 

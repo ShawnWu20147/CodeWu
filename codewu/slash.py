@@ -13,7 +13,9 @@ from . import config
 from . import ui
 from .config import SYSTEM_PROMPT
 from .session import (
-    list_sessions,
+    format_age,
+    list_all_sessions,
+    list_sessions_for_project,
     load_session,
     new_session_id,
     print_history,
@@ -47,24 +49,48 @@ def _cmd_exit(arg, sid, msgs):
 
 
 def _cmd_sessions(arg, sid, msgs):
-    rows = list_sessions()
+    """Default: sessions for the current cwd. `/sessions all` to span projects."""
+    scope = arg.strip().lower()
+    if scope in ("all", "*"):
+        rows = list_all_sessions()
+        scope_label = "(all projects)"
+        show_cwd = True
+    else:
+        rows = list_sessions_for_project()
+        scope_label = f"(cwd: {config.CWD})"
+        show_cwd = False
+
     if not rows:
-        print(ui.style("(no saved sessions)", ui.DIM))
+        print(ui.style(f"(no saved sessions {scope_label})", ui.DIM))
+        print(ui.style("    Tip: /sessions all  to see sessions from other projects", ui.DIM))
         return sid, msgs, False
-    sid_w = max(len(r[0]) for r in rows)
-    cwd_w = min(50, max(len(r[1]) for r in rows))
-    header = ui.style(
-        f"  {'session_id':<{sid_w}}  {'cwd':<{cwd_w}}  first message",
-        ui.BOLD,
-    )
-    rule = ui.style(f"  {'-' * sid_w}  {'-' * cwd_w}  {'-' * 12}", ui.DIM)
-    print(header)
-    print(rule)
-    for s, cwd, hint in rows:
-        cwd_disp = cwd if len(cwd) <= cwd_w else "..." + cwd[-(cwd_w - 3):]
-        # Pad first (based on visible width), then style — otherwise ANSI codes break alignment.
-        sid_styled = ui.style(f"{s:<{sid_w}}", ui.CYAN)
-        print(f"  {sid_styled}  {cwd_disp:<{cwd_w}}  {hint}")
+
+    print(ui.style(f"Sessions {scope_label}: {len(rows)} total", ui.BOLD))
+    print()
+
+    sid_w = max(len(r["session_id"]) for r in rows)
+    age_w = max(len(format_age(r["session_id"])) for r in rows)
+    cwd_w = min(50, max(len(r.get("cwd", "")) for r in rows)) if show_cwd else 0
+
+    for row in rows:
+        s = row["session_id"]
+        age = format_age(s)
+        nmsg = row.get("n_messages", 0)
+        first = row.get("first_user_msg", "")
+        if len(first) > 80:
+            first = first[:80] + "…"
+        s_styled = ui.style(f"{s:<{sid_w}}", ui.CYAN)
+        age_styled = ui.style(f"{age:<{age_w}}", ui.DIM)
+        meta = ui.style(f"{nmsg} msgs", ui.DIM)
+        if show_cwd:
+            cwd_str = row.get("cwd", "?")
+            cwd_disp = cwd_str if len(cwd_str) <= cwd_w else "..." + cwd_str[-(cwd_w - 3):]
+            cwd_styled = ui.style(f"{cwd_disp:<{cwd_w}}", ui.DIM)
+            print(f"  {s_styled}  {age_styled}  {meta}  {cwd_styled}")
+        else:
+            print(f"  {s_styled}  {age_styled}  {meta}")
+        if first:
+            print(ui.style(f"      {first!r}", ui.DIM))
     return sid, msgs, False
 
 
@@ -201,7 +227,7 @@ SLASH_COMMANDS: dict[str, dict[str, Any]] = {
     "/config":   {"arg_hint": "",     "desc": "Show effective config (env > ~/.codewu/config.json > default)", "handler": _cmd_config},
     "/bg":       {"arg_hint": "[list|stop <pid>|log <pid>]", "desc": "Manage background processes started with run_cmd(background=true)", "handler": _cmd_bg},
     "/resume":   {"arg_hint": "[id]", "desc": "Resume a saved session (latest if id omitted)",   "handler": _cmd_resume},
-    "/sessions": {"arg_hint": "",     "desc": "List saved sessions in ~/.codewu/sessions/",      "handler": _cmd_sessions},
+    "/sessions": {"arg_hint": "[all]", "desc": "List saved sessions for current cwd (or `all` for every project)", "handler": _cmd_sessions},
     "/new":      {"arg_hint": "",     "desc": "Discard current session and start fresh",         "handler": _cmd_new},
     "/dump":     {"arg_hint": "",     "desc": "Print last 3 messages (debug)",                   "handler": _cmd_dump},
     "/exit":     {"arg_hint": "",     "desc": "Quit CodeWu (session is auto-saved)",             "handler": _cmd_exit},

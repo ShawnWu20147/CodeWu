@@ -189,6 +189,20 @@ D:\git-nonwork\CodeWu\
   - 新增 `--allow-all` CLI flag：跳过 y/n 提示但保留 preview，banner 显眼 ⚠ 警告
   - 顺手修了 `approve_or_skip` 中 `edit` 命令后 `cmd` 变量未刷新的小 bug
 - 2026-05-16 提交 git + 推送 `https://github.com/ShawnWu20147/CodeWu`（commit 18bbff5）
+- 2026-05-17 v1.20 session 按项目 (cwd) 子文件夹组织 + `--pick` 交互选 session：
+  - 用户反馈 session 太松散；想要每个项目独立 + 启动时能挑选某个继续
+  - **新文件布局**：`~/.codewu/sessions/<cwd-slug>/<session-id>.json`，每项目独立 `latest.json`
+    - `cwd_to_slug()`：`D:\git-nonwork\yongshen` → `D--git-nonwork--yongshen`（仿 Claude Code `--` 风格）；drive letter colon 去掉、`\` `/` 统一转 `--`、过滤 illegal filename chars
+    - 没 `cwd` 字段的老 session 进 `_unknown_/`
+  - **`_maybe_migrate_legacy_sessions()`** 模块 import 时跑一次：扫顶层 `*.json`，读每个的 `cwd` → 算 slug → 移到子文件夹；幂等；老的全局 `latest.json` 删掉（每项目自己维护）；解析失败的文件不动（不丢数据）
+  - **`--pick` / `-p` 启动 flag**：列当前 cwd 下所有 session，每条显示 id + 消息数 + 相对时间（`30s ago` / `2h ago` / `3 days ago` / 老的 `2026-05-15`）+ 首条 user 消息 100 字符截断；输入数字 resume、`n` 新开、`q` 退出；空 list 时退回新 session
+  - **`--resume` 语义微改**：无 id 时加载**当前项目的** latest；带 id 时先在当前项目找，找不到 fall back 到 `_find_session_anywhere`（跨项目贴 id 仍可用）
+  - **`/sessions` 项目作用域**默认；新 `arg_hint=[all]`：`/sessions all` 列全部项目（保留全局视图，新增 cwd 列）
+  - 新 helper `format_age(session_id_or_iso)`：通用相对时间格式化
+  - 新 `list_sessions_for_project(cwd?)` / `list_all_sessions()` 返回 dict 形（替代旧的 tuple，更易扩展）
+  - 旧 `list_sessions()` 移除——内部唯一调用方 `_cmd_sessions` 已更新
+  - 端到端实测：跑 2 个 session 后 sessions/ 正确长出 `D--git-nonwork--CodeWu/` 子文件夹 + 2 个 json + latest.json；`/sessions` 显示项目作用域；`/sessions all` 加 cwd 列；`codewu --pick` 输 1 正确 resume 显示 history、输 n 正确开新
+  - Sync `__version__` 0.1.19 → 0.1.20
 - 2026-05-17 v1.19 non-stream 兜底 + 失败也写 session（用户实测后驱动）：
   - **现象**：`RemoteProtocolError: peer closed connection without sending complete message body` 连续 3 次失败；用户去看 proxy log 全是 `200 OK`，每个请求 `output: 3` tokens——说明 proxy 看的是请求**开头**的状态码，body 中途 chunked encoding 被截 proxy 不感知
   - **重试无用**：同样的 input → 同样的 truncated output。需要换路

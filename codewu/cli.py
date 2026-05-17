@@ -30,12 +30,68 @@ from .repl import (
     prompt_input,
 )
 from .session import (
+    format_age,
+    list_sessions_for_project,
     load_session,
     new_session_id,
     save_session,
 )
 from .slash import handle_slash, print_exit_hint
 from .tools import tool_run_cmd
+
+
+def _interactive_pick() -> tuple[str | None, list[dict[str, Any]] | None]:
+    """Show a numbered menu of saved sessions for the current cwd and let the
+    user resume one, start a new session, or quit.
+
+    Returns:
+      (session_id, messages) — resume that one
+      (None, None)           — start a fresh session
+    sys.exit on quit / Ctrl+C / EOF.
+    """
+    rows = list_sessions_for_project()
+    if not rows:
+        print(ui.style(f"No saved sessions for {config.CWD}", ui.DIM))
+        print(ui.style("(starting a new session)", ui.DIM))
+        return None, None
+
+    print()
+    print(ui.style(f"Sessions for {config.CWD} ({len(rows)} found):", ui.BOLD))
+    for i, row in enumerate(rows, start=1):
+        sid = row["session_id"]
+        age = format_age(sid)
+        nmsg = row.get("n_messages", 0)
+        first = row.get("first_user_msg", "")
+        if len(first) > 100:
+            first = first[:100] + "…"
+        idx = ui.style(f"  [{i}]", ui.BOLD, ui.CYAN)
+        meta = ui.style(f"{sid}  ({nmsg} msgs, {age})", ui.DIM)
+        print()
+        print(f"{idx}  {meta}")
+        if first:
+            print(ui.style(f"       {first!r}", ui.DIM))
+    print()
+
+    prompt = ui.style("Pick number to resume, [n]ew, or [q]uit: ", ui.BOLD, ui.YELLOW)
+    while True:
+        try:
+            choice = input(prompt).strip().lower()
+        except (KeyboardInterrupt, EOFError):
+            print()
+            sys.exit(0)
+        if choice in ("n", "new", ""):
+            return None, None
+        if choice in ("q", "quit", "exit"):
+            sys.exit(0)
+        try:
+            idx = int(choice)
+            if 1 <= idx <= len(rows):
+                chosen_sid = rows[idx - 1]["session_id"]
+                sid, msgs = load_session(chosen_sid)
+                return sid, msgs
+        except ValueError:
+            pass
+        print(ui.style(f"  invalid choice: {choice!r}", ui.RED))
 
 
 def _clean_orphan_tool_calls(messages: list[dict[str, Any]]) -> bool:
@@ -130,11 +186,25 @@ def main() -> int:
         action="store_true",
         help="Skip y/n approval for all side-effect tools. Previews still print. Use with care.",
     )
+    ap.add_argument(
+        "--pick", "-p",
+        action="store_true",
+        help="Show saved sessions for the current cwd and let you pick one to resume (or start fresh).",
+    )
     args = ap.parse_args()
 
     config.ALLOW_ALL = args.allow_all
 
-    if args.resume is None:
+    if args.pick:
+        chosen = _interactive_pick()
+        if chosen[0] is None:
+            session_id = new_session_id()
+            messages: list[dict[str, Any]] = [{"role": "system", "content": config.SYSTEM_PROMPT}]
+            resumed = False
+        else:
+            session_id, messages = chosen
+            resumed = True
+    elif args.resume is None:
         session_id = new_session_id()
         messages: list[dict[str, Any]] = [{"role": "system", "content": config.SYSTEM_PROMPT}]
         resumed = False
