@@ -11,15 +11,37 @@ A minimal coding agent prototype. Pure-Python package (`codewu/`), one external 
 
 ## Install
 
-### Option A — install globally as a CLI (recommended)
+### Quick install (recommended)
+
+```powershell
+git clone https://github.com/ShawnWu20147/CodeWu.git
+cd CodeWu
+.\install.ps1
+```
+
+If your PowerShell execution policy blocks the script:
+```powershell
+powershell -ExecutionPolicy Bypass -File install.ps1
+```
+
+The installer detects Python, refuses if a `codewu.exe` is already running (you must `/exit` first), then runs `pip install -e .` and prints usage hints with your config/session paths.
+
+**Linux / macOS:**
+```bash
+git clone https://github.com/ShawnWu20147/CodeWu.git
+cd CodeWu
+./install.sh
+```
+
+### Manual install (if you don't want to run the script)
 
 ```powershell
 pip install -e D:\path\to\CodeWu
 ```
 
-After this, `codewu` is on your `PATH` and you can run it from **any** working directory. The session log (`~/.codewu/sessions/`) is stored globally; each saved session records the cwd it was started in so you can tell projects apart in `/sessions`.
+After installing either way, `codewu` is on your `PATH` and you can run it from **any** working directory. The session log (`~/.codewu/sessions/`) is stored globally; each saved session records the cwd it was started in so you can tell projects apart in `/sessions`.
 
-### Option B — run directly without install
+### Run without installing
 
 ```powershell
 pip install -r requirements.txt

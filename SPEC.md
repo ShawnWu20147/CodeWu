@@ -189,6 +189,17 @@ D:\git-nonwork\CodeWu\
   - 新增 `--allow-all` CLI flag：跳过 y/n 提示但保留 preview，banner 显眼 ⚠ 警告
   - 顺手修了 `approve_or_skip` 中 `edit` 命令后 `cmd` 变量未刷新的小 bug
 - 2026-05-16 提交 git + 推送 `https://github.com/ShawnWu20147/CodeWu`（commit 18bbff5）
+- 2026-05-17 v1.14 install.ps1 / install.sh 安装脚本：
+  - 用户反馈：「`pip install -e .` 在哪儿跑？最好做个安装脚本」
+  - 新增 `install.ps1`（Windows PowerShell）：
+    - `Set-Location $PSScriptRoot` 让用户从任何目录都能跑
+    - 检测 Python 在 PATH 上，没找到给链接退出
+    - 检测 `Get-Process codewu` 是否有运行实例（pip 不能覆盖锁住的 .exe），有则报 PID + 指引「/exit 或 Stop-Process」
+    - 调 `python -m pip install -e .`，失败时给常见原因清单（exe 锁、Python 版本、site-packages 权限）
+    - 成功后打印 cyan 使用提示 + config/sessions 路径
+  - 新增 `install.sh`（POSIX bash，文件 mode 100755）：精简版同上，无 process detection（POSIX 上 pip 替换二进制不锁）
+  - README「Install」章节重写：one-liner clone + 脚本调用为首选；保留手动 `pip install -e .` 和 `python -m codewu` 作为备选
+  - 实测 install.ps1 端到端：从 0.1.12 自动卸载 + 装上 0.1.13，结尾干净打使用提示
 - 2026-05-17 v1.13 修「`npm init -y` 等命令在交互 TTY 下挂起」：
   - 用户反馈：cmd 里直接跑 `npm init -y 2>&1` 秒成，codewu 里跑就一直 timeout
   - 复现：用 codewu 的 Popen 精确配置在 pipe stdin 下跑都正常（< 3 秒），但用户的 codewu 是交互 TTY 启动的，**子进程继承用户终端的 TTY 作为 stdin**，prompt_toolkit 又对终端状态做过手脚，npm 或其子进程（cmd → node）看到 TTY 可能进入交互/检测分支挂起
