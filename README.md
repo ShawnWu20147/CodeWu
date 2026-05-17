@@ -1,6 +1,6 @@
 # CodeWu
 
-A minimal coding agent prototype. Single-file Python (`codewu.py`), one external dep (`openai`), four local tools, per-call y/n approval for any side effect.
+A minimal coding agent prototype. Pure-Python package (`codewu/`), one external dep (`openai`), four local tools, per-call y/n approval for any side effect, ANSI colors, session resume.
 
 > Builds JS or Python programs. See [SPEC.md](./SPEC.md) for the design contract.
 
@@ -17,13 +17,13 @@ A minimal coding agent prototype. Single-file Python (`codewu.py`), one external
 pip install -e D:\path\to\CodeWu
 ```
 
-After this, `codewu` is on your `PATH` and you can run it from **any** working directory. The session log (`.codewu/sessions/`) is stored under that directory, so each project gets its own history.
+After this, `codewu` is on your `PATH` and you can run it from **any** working directory. The session log (`~/.codewu/sessions/`) is stored globally; each saved session records the cwd it was started in so you can tell projects apart in `/sessions`.
 
 ### Option B — run directly without install
 
 ```powershell
 pip install -r requirements.txt
-python codewu.py
+python -m codewu
 ```
 
 ## Run
@@ -49,6 +49,7 @@ codewu --allow-all
 | `CODEWU_BASE_URL` | `http://localhost:4141/v1` | Chat Completions endpoint |
 | `CODEWU_MODEL`    | `claude-opus-4.6-1m`       | Model name |
 | `CODEWU_API_KEY`  | placeholder                | Sent to the SDK; the proxy doesn't validate |
+| `NO_COLOR` / `CODEWU_NO_COLOR` | unset | Set to any value to disable ANSI colors. Colors also auto-disable when stdout is not a TTY. |
 
 ## Tools
 

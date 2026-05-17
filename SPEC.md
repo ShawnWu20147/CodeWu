@@ -100,21 +100,34 @@ while True:
 - 工作目录默认 `os.getcwd()`，所有路径相对它解析
 - Shell 选择：Windows 默认 `powershell -NoProfile -Command`，POSIX 默认 `sh -c`；platform 在 system prompt 里告知模型
 
-## 10. Repository Layout（v1.3+）
+## 10. Repository Layout（v1.6+）
 
 ```
 D:\git-nonwork\CodeWu\
 ├── SPEC.md                    # 本文件
-├── codewu.py                  # 全部逻辑（原 main.py，v1.3 重命名）
-├── pyproject.toml             # v1.3 加入；声明 codewu console script
-├── requirements.txt           # openai 一行（Option B 用）
 ├── README.md                  # 用法 + 配置说明
-├── .gitignore                 # 忽略运行时 .codewu/、__pycache__/ 等
-└── <cwd>/.codewu/             # 注意：sessions 落在用户 cwd，不是仓库内
-    └── sessions/
-        ├── <ts>-<slug>.json
-        └── latest.json
+├── pyproject.toml             # 声明 codewu console script
+├── requirements.txt           # openai 一行（Option B 用）
+├── .gitignore
+└── codewu/                    # v1.6 起改为包结构
+    ├── __init__.py            # __version__、暴露 main
+    ├── __main__.py            # `python -m codewu` 入口
+    ├── cli.py                 # main()、argparse、REPL 主循环、banner
+    ├── config.py              # env vars、CWD、SYSTEM_PROMPT、ALLOW_ALL state
+    ├── ui.py                  # ANSI 颜色常量、separator、TTY 检测、Windows ANSI 启用
+    ├── tools.py               # 4 个 tool 实现 + JSON Schema + dispatch_tool
+    ├── approval.py            # approve_or_skip + _preview_write
+    ├── session.py             # save/load/list/new_session_id + print_history
+    ├── slash.py               # SLASH_COMMANDS 注册表 + 各 handler
+    └── loop.py                # call_llm + run_turn + looks_like_promise + auto-continue
+
+# 运行时数据（v1.4 起全局，跨 cwd 共享）：
+~/.codewu/sessions/
+├── <ts>-<slug>.json
+└── latest.json
 ```
+
+依赖 DAG（无环）：`config`/`ui` → `tools`/`session` → `approval`/`slash` → `loop` → `cli`。
 
 ## 11. Done Contract
 
@@ -174,6 +187,13 @@ D:\git-nonwork\CodeWu\
   - 新增 `--allow-all` CLI flag：跳过 y/n 提示但保留 preview，banner 显眼 ⚠ 警告
   - 顺手修了 `approve_or_skip` 中 `edit` 命令后 `cmd` 变量未刷新的小 bug
 - 2026-05-16 提交 git + 推送 `https://github.com/ShawnWu20147/CodeWu`（commit 18bbff5）
+- 2026-05-17 v1.6 用户要求重构 + UX 增强：
+  - **单文件 codewu.py（~755 行）拆为 codewu/ 包，10 个模块**：__init__、__main__、cli、config、ui、tools、approval、session、slash、loop；依赖 DAG 无环
+  - `pyproject.toml`：`py-modules = ["codewu"]` → `packages = ["codewu"]`；入口 `codewu = "codewu.cli:main"`；新增 `python -m codewu` 入口
+  - **加颜色系统**（`codewu/ui.py`）：ANSI 常量 + `style()` helper；TTY 检测自动启停；支持 `NO_COLOR` / `CODEWU_NO_COLOR` 环境变量；Windows 启用 `ENABLE_VIRTUAL_TERMINAL_PROCESSING` via ctypes
+  - 颜色配色：`[CodeWu]` bold cyan、`[~]` system meta dim、`[Tool]/[Cmd]` bold yellow、preview `\| ...` dim、`(NEW)` green / `(OVERWRITE)` yellow、`[!]` bold red、`[*]` bold green、`>` user 提示 bold green、`!cmd` bold blue、session_id cyan、box drawing dim
+  - **轮次分隔线**：每轮（除首轮外）在 `>` 提示前打印 dim 60-字符 `─` 横线
+  - 修了几个对齐 bug：`/sessions` / `/help` 表格用 ANSI 包裹前先 pad，再 style
 - 2026-05-16 v1.5 v1.4 prompt 不够强，「promise then stop」复发后驱动：
   - **新增代码层 auto-continue 兜底**：`looks_like_promise(text)` 启发式 + `run_turn` 检测到无 tool_call 且文本看起来是「半路承诺」时，注入 user 消息 "Call the tool now to perform the action you just announced" 再次调用 LLM，上限 3 次/turn
   - 启发式两路：(a) 结尾是 `:` `：` `...` `。。。` `—` 任一字符；(b) 文本 ≤ 250 字符且含「I'll/I will/let me + 动作动词」regex 或「我来/我现在/我去/我马上/我接下来/让我来」中文短语

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "codewu"
-version = "0.1.3"
+version = "0.1.6"
 description = "A minimal coding agent prototype: Chat Completions API + 4 local tools, per-call y/n approval, session resume."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -14,7 +14,7 @@ dependencies = [
 ]
 
 [project.scripts]
-codewu = "codewu:main"
+codewu = "codewu.cli:main"
 
 [tool.setuptools]
-py-modules = ["codewu"]
+packages = ["codewu"]
