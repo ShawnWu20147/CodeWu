@@ -13,6 +13,7 @@ import threading
 from pathlib import Path
 from typing import Any
 
+from . import bg
 from . import config
 from . import ui
 from .config import CWD, IS_WINDOWS, MAX_OUTPUT_BYTES, SHELL_HINT
@@ -143,7 +144,84 @@ def _kill_process_tree(proc: "subprocess.Popen") -> None:
         pass
 
 
-def tool_run_cmd(command: str, timeout_sec: int | None = None) -> dict[str, Any]:
+def _run_bg(command: str) -> dict[str, Any]:
+    """Spawn `command` detached. Returns immediately with pid + log path.
+    Output goes to ~/.codewu/bg/<id>.log; the process survives codewu exit.
+    """
+    if IS_WINDOWS:
+        argv = ["powershell", "-NoProfile", "-Command", command]
+    else:
+        argv = ["sh", "-c", command]
+
+    # Slug the log filename from the first token of the command so the
+    # file name carries a hint about what's inside.
+    first_token = command.strip().split(None, 1)[0] if command.strip() else "bg"
+    log_path = bg.new_log_path(first_token)
+
+    try:
+        log_fh = open(log_path, "w", encoding="utf-8", errors="replace")
+    except Exception as e:
+        return _err(f"failed to open bg log file {log_path}: {type(e).__name__}: {e}")
+
+    try:
+        if IS_WINDOWS:
+            # CREATE_NO_WINDOW (0x08000000): give the child its own *hidden*
+            # console so console-mode binaries (powershell.exe is one!) can
+            # still initialize properly. DETACHED_PROCESS (no console at all)
+            # makes PowerShell exit immediately during startup, even with all
+            # stdio redirected — empirically confirmed on Windows 10 / PS 5.1.
+            # CREATE_NEW_PROCESS_GROUP (0x00000200): independent signal group
+            # so the child outlives the parent.
+            creationflags = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
+            proc = subprocess.Popen(
+                argv,
+                cwd=str(CWD),
+                stdin=subprocess.DEVNULL,
+                stdout=log_fh,
+                stderr=subprocess.STDOUT,
+                creationflags=creationflags,
+                close_fds=True,
+            )
+        else:
+            proc = subprocess.Popen(
+                argv,
+                cwd=str(CWD),
+                stdin=subprocess.DEVNULL,
+                stdout=log_fh,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+                close_fds=True,
+            )
+    except Exception as e:
+        try:
+            log_fh.close()
+        except Exception:
+            pass
+        return _err(f"failed to spawn bg process: {type(e).__name__}: {e}")
+    finally:
+        # The child has its own duplicated handle; we can safely close ours.
+        try:
+            log_fh.close()
+        except Exception:
+            pass
+
+    bg.register(pid=proc.pid, command=command, cwd=str(CWD), log_file=str(log_path))
+
+    print(ui.style(f"[~] started in background  pid={proc.pid}", ui.BOLD, ui.GREEN))
+    print(ui.style(f"    log: {log_path}", ui.DIM))
+    print(ui.style(f"    stop: /bg stop {proc.pid}", ui.DIM))
+
+    return _ok(
+        f"started background process pid={proc.pid}\n"
+        f"command: {command}\n"
+        f"log file: {log_path}\n"
+        f"To stop the process: /bg stop {proc.pid}\n"
+        f"To tail its log:     /bg log {proc.pid}\n"
+        f"The process survives across CodeWu sessions until stopped."
+    )
+
+
+def tool_run_cmd(command: str, timeout_sec: int | None = None, background: bool = False) -> dict[str, Any]:
     """Run a shell command in cwd, streaming stdout/stderr live to the terminal.
 
     Implementation notes:
@@ -155,6 +233,9 @@ def tool_run_cmd(command: str, timeout_sec: int | None = None) -> dict[str, Any]
       - On timeout we kill the process and return whatever stdout/stderr we
         managed to collect so the LLM has context to choose a longer retry.
     """
+    if background:
+        return _run_bg(command)
+
     if timeout_sec is None or timeout_sec <= 0:
         timeout_sec = config.DEFAULT_CMD_TIMEOUT_SEC
 
@@ -329,7 +410,10 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                 f"+ captured output. Default timeout is {config.DEFAULT_CMD_TIMEOUT_SEC}s; "
                 "pass a longer timeout_sec for operations that legitimately take longer "
                 "(npm install ~300, pip install ~180, docker build ~600, large test "
-                "suites ~300). Requires user approval."
+                "suites ~300). For commands that don't terminate on their own "
+                "(dev servers like `npm start` / `vite dev`, file watchers, web servers, "
+                "long-running daemons), pass background=true instead — DO NOT crank up "
+                "timeout_sec. Requires user approval."
             ),
             "parameters": {
                 "type": "object",
@@ -343,9 +427,23 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                         "description": (
                             "Maximum seconds to allow before the process is killed. "
                             "Omit (or 0) to use the configured default. Set explicitly "
-                            "for slow operations like installs, builds, or large test runs."
+                            "for slow operations like installs, builds, or large test runs. "
+                            "Ignored when background=true."
                         ),
                         "minimum": 1,
+                    },
+                    "background": {
+                        "type": "boolean",
+                        "description": (
+                            "If true, spawn the command detached and return immediately. "
+                            "Use for `npm start`, `vite dev`, `python -m http.server`, "
+                            "watchers, daemons — anything that legitimately runs forever. "
+                            "stdout/stderr are written to a log file the user can tail; "
+                            "the process keeps running across CodeWu sessions until the "
+                            "user runs `/bg stop <pid>`. When background is true, "
+                            "timeout_sec is ignored. DO NOT use `Start-Process` / nohup / & "
+                            "hacks — use this flag so the process is tracked."
+                        ),
                     },
                 },
                 "required": ["command"],

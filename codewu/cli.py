@@ -19,6 +19,7 @@ from typing import Any
 
 from openai import OpenAI
 
+from . import bg
 from . import config
 from . import ui
 from .loop import run_turn
@@ -77,6 +78,14 @@ def banner(session_id: str, resumed: bool) -> None:
     Type your request, or {ui.style('/help', ui.CYAN)} for commands."""))
     if config.ALLOW_ALL:
         print(ui.style("  ⚠  --allow-all is set: tool approval prompts are bypassed.", ui.BOLD, ui.RED))
+    bg_alive = bg.list_alive()
+    if bg_alive:
+        n = len(bg_alive)
+        plural = "es" if n != 1 else ""
+        print(ui.style(
+            f"  bg:      {n} background process{plural} still running — use {ui.style('/bg', ui.CYAN)}{ui.YELLOW} to list / stop",
+            ui.YELLOW,
+        ))
 
 
 def main() -> int:

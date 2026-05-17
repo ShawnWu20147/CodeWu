@@ -175,9 +175,16 @@ def approve_or_skip(name: str, args: dict[str, Any]) -> tuple[bool, dict[str, An
     if name == "run_cmd":
         def _render_cmd_header(args_):
             cmd = args_.get("command", "")
-            timeout = args_.get("timeout_sec") or config.DEFAULT_CMD_TIMEOUT_SEC
+            background = bool(args_.get("background", False))
             print(ui.style("[Cmd]", ui.BOLD, ui.YELLOW) + f" {cmd}")
-            print(ui.style(f"      timeout: {timeout}s", ui.DIM))
+            if background:
+                print(ui.style(
+                    "      (background — no timeout; runs detached, /bg stop <pid> to kill)",
+                    ui.GREEN,
+                ))
+            else:
+                timeout = args_.get("timeout_sec") or config.DEFAULT_CMD_TIMEOUT_SEC
+                print(ui.style(f"      timeout: {timeout}s", ui.DIM))
 
         if config.ALLOW_ALL:
             _render_cmd_header(args)

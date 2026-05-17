@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from . import bg
 from . import config
 from . import ui
 from .config import SYSTEM_PROMPT
@@ -120,6 +121,68 @@ def _cmd_config(arg, sid, msgs):
     return sid, msgs, False
 
 
+def _cmd_bg(arg, sid, msgs):
+    parts = arg.strip().split(maxsplit=1)
+    sub = parts[0].lower() if parts else "list"
+    rest = parts[1] if len(parts) > 1 else ""
+
+    if sub in ("", "list", "ls"):
+        procs = bg.list_alive()
+        if not procs:
+            print(ui.style("(no background processes running)", ui.DIM))
+            return sid, msgs, False
+        print(ui.style(f"Background processes ({len(procs)} running):", ui.BOLD))
+        for p in procs:
+            pid_str = ui.style(f"pid={p['pid']}", ui.CYAN)
+            print(f"  {pid_str}  started={p.get('started_at', '?')}")
+            print(ui.style(f"    cmd: {p.get('command', '')[:120]}", ui.DIM))
+            print(ui.style(f"    cwd: {p.get('cwd', '')}", ui.DIM))
+            print(ui.style(f"    log: {p.get('log_file', '')}", ui.DIM))
+        return sid, msgs, False
+
+    if sub == "stop":
+        if not rest.strip():
+            print(ui.style("[!] usage: /bg stop <pid>", ui.BOLD, ui.RED))
+            return sid, msgs, False
+        try:
+            pid = int(rest.strip())
+        except ValueError:
+            print(ui.style(f"[!] pid must be a number, got: {rest!r}", ui.BOLD, ui.RED))
+            return sid, msgs, False
+        killed = bg.stop(pid)
+        if killed:
+            print(ui.style(f"[*] killed bg process pid={pid}", ui.BOLD, ui.GREEN))
+        else:
+            print(ui.style(f"(pid={pid} was not alive; state cleaned)", ui.DIM))
+        return sid, msgs, False
+
+    if sub == "log":
+        if not rest.strip():
+            print(ui.style("[!] usage: /bg log <pid>", ui.BOLD, ui.RED))
+            return sid, msgs, False
+        try:
+            pid = int(rest.strip())
+        except ValueError:
+            print(ui.style(f"[!] pid must be a number, got: {rest!r}", ui.BOLD, ui.RED))
+            return sid, msgs, False
+        log_path, lines = bg.tail_log(pid, n_lines=50)
+        if not log_path:
+            print(ui.style(f"[!] no bg process record for pid={pid}", ui.BOLD, ui.RED))
+            return sid, msgs, False
+        if not lines:
+            print(ui.style(f"(log file empty or missing: {log_path})", ui.DIM))
+            return sid, msgs, False
+        print(ui.style(f"--- tail -n 50  {log_path} ---", ui.DIM))
+        bar = ui.style("│ ", ui.BLUE)
+        for line in lines:
+            print(f"{bar}{line}", end="" if line.endswith("\n") else "\n")
+        return sid, msgs, False
+
+    print(ui.style(f"[!] unknown /bg subcommand: {sub!r}", ui.BOLD, ui.RED))
+    print(ui.style("    usage: /bg [list|stop <pid>|log <pid>]", ui.DIM))
+    return sid, msgs, False
+
+
 def _cmd_help(arg, sid, msgs):
     width = max(
         len(name) + (len(meta["arg_hint"]) + 1 if meta["arg_hint"] else 0)
@@ -136,6 +199,7 @@ def _cmd_help(arg, sid, msgs):
 SLASH_COMMANDS: dict[str, dict[str, Any]] = {
     "/help":     {"arg_hint": "",     "desc": "Show this help",                                  "handler": _cmd_help},
     "/config":   {"arg_hint": "",     "desc": "Show effective config (env > ~/.codewu/config.json > default)", "handler": _cmd_config},
+    "/bg":       {"arg_hint": "[list|stop <pid>|log <pid>]", "desc": "Manage background processes started with run_cmd(background=true)", "handler": _cmd_bg},
     "/resume":   {"arg_hint": "[id]", "desc": "Resume a saved session (latest if id omitted)",   "handler": _cmd_resume},
     "/sessions": {"arg_hint": "",     "desc": "List saved sessions in ~/.codewu/sessions/",      "handler": _cmd_sessions},
     "/new":      {"arg_hint": "",     "desc": "Discard current session and start fresh",         "handler": _cmd_new},

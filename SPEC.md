@@ -189,6 +189,26 @@ D:\git-nonwork\CodeWu\
   - 新增 `--allow-all` CLI flag：跳过 y/n 提示但保留 preview，banner 显眼 ⚠ 警告
   - 顺手修了 `approve_or_skip` 中 `edit` 命令后 `cmd` 变量未刷新的小 bug
 - 2026-05-16 提交 git + 推送 `https://github.com/ShawnWu20147/CodeWu`（commit 18bbff5）
+- 2026-05-17 v1.18 后台进程支持（dev server 不再被 timeout 杀）：
+  - 用户实测：模型跑 `npx react-scripts start` 编译完毕、dev server up，60s 后却被 timeout-kill 掉，没法接着开浏览器查看
+  - 模型试图用 `Start-Process powershell -ArgumentList '-NoExit', ...` 弹独立 PowerShell 窗口绕过——hack 不优雅且不可控
+  - **新模块 `codewu/bg.py`**：背景进程 lifecycle / state
+    - 状态文件 `~/.codewu/bg/processes.json`（pid / command / cwd / log_file / started_at）
+    - `is_alive(pid)` Windows 走 `tasklist /FI`、POSIX 走 `os.kill(pid, 0)`
+    - `list_alive()` 自动剪枝死掉的 entry
+    - `stop(pid)` Windows 走 `taskkill /F /T`（杀整树）、POSIX 先 SIGTERM 再 SIGKILL
+    - `tail_log(pid, n)` 取最后 N 行
+  - **`run_cmd` schema 加 `background: boolean`** 参数；description 明确告知 LLM「dev server / watcher / web server 用这个，不要 cranking timeout_sec，不要用 Start-Process hack」
+  - **`_run_bg()` Windows spawn 用 `CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP`**（不是 `DETACHED_PROCESS`）：
+    - `DETACHED_PROCESS` 在 PowerShell 这种 console app 上立即退出（实测确认，log 文件空）
+    - `CREATE_NO_WINDOW` 给隐藏 console，PowerShell 能正常初始化；`CREATE_NEW_PROCESS_GROUP` 让子进程独立于父信号 group，存活于 codewu 退出
+    - stdout/stderr → `~/.codewu/bg/<ts>-<slug>-<hex>.log`，stdin → DEVNULL
+  - **新 slash 命令 `/bg`**：`/bg list`（默认）/ `/bg stop <pid>` / `/bg log <pid>`
+  - banner 启动时若有存活 bg：`bg: N background processes still running — use /bg to list / stop` yellow
+  - **SYSTEM_PROMPT 新增 BACKGROUND PROCESSES 段落**：明确把「永不终止类命令」分流到 `background=true`，列正反例
+  - approval preview 在 `background=true` 时显示 `(background — no timeout; runs detached, /bg stop <pid> to kill)` green，与 normal `timeout: Xs` 区分
+  - 端到端实测全过：spawn heartbeat 循环 → list 显示、log tail 显示 10 个 tick、stop 杀掉、再 list 清零；banner 在启动时正确显示 bg 计数
+  - Sync `__version__` 0.1.17 → 0.1.18
 - 2026-05-17 v1.17 流式失败自动重试（exponential backoff）：
   - 用户反馈：`RemoteProtocolError: peer closed connection without sending complete message body` 经常撞到，体验差
   - 根因：4141 反代偶发中途断流，OpenAI SDK 的内置重试不覆盖**已开始**的 stream，直接抛
