@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import platform
+import subprocess
 import sys
 from datetime import date
 from pathlib import Path
@@ -205,6 +206,40 @@ TODAY = date.today().isoformat()
 IS_WINDOWS = platform.system() == "Windows"
 SHELL_HINT = "PowerShell" if IS_WINDOWS else "POSIX sh"
 
+
+def _detect_powershell_major() -> int | None:
+    """Probe the PowerShell major version (5 for Windows-bundled, 7+ for pwsh).
+    Returns None on POSIX or if the probe fails. ~200ms startup cost on Windows.
+    """
+    if not IS_WINDOWS:
+        return None
+    try:
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", "$PSVersionTable.PSVersion.Major"],
+            capture_output=True, text=True, timeout=5,
+            stdin=subprocess.DEVNULL,
+        )
+        return int(result.stdout.strip())
+    except Exception:
+        return None
+
+
+POWERSHELL_MAJOR = _detect_powershell_major()
+
+# Shell-specific notes that get injected into SYSTEM_PROMPT so the model
+# avoids generating shell syntax that won't work on this host.
+if POWERSHELL_MAJOR is not None and POWERSHELL_MAJOR < 7:
+    _SHELL_NOTE = (
+        f"  IMPORTANT: this is PowerShell {POWERSHELL_MAJOR}.x (Windows-bundled). "
+        f"It does NOT support `&&` or `||` for command chaining (those need "
+        f"PowerShell 7+). Use `;` for unconditional sequencing, or — better — "
+        f"make TWO separate run_cmd calls so the user approves each step."
+    )
+elif POWERSHELL_MAJOR is not None:
+    _SHELL_NOTE = f"  Note: PowerShell {POWERSHELL_MAJOR}.x detected; `&&` / `||` are supported."
+else:
+    _SHELL_NOTE = ""
+
 # Mutated by cli.main() based on the --allow-all CLI flag.
 ALLOW_ALL = False
 
@@ -222,6 +257,7 @@ ENVIRONMENT
 - Today's date: {TODAY}
 - Host OS: {platform.system()} {platform.release()}
 - Shell used by run_cmd: {SHELL_HINT}
+{_SHELL_NOTE}
 - Languages you may produce: JavaScript and Python only.
 
 ═══════════════════════════════════════════════════════════════════════════

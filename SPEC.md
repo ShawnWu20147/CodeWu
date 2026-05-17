@@ -189,6 +189,16 @@ D:\git-nonwork\CodeWu\
   - 新增 `--allow-all` CLI flag：跳过 y/n 提示但保留 preview，banner 显眼 ⚠ 警告
   - 顺手修了 `approve_or_skip` 中 `edit` 命令后 `cmd` 变量未刷新的小 bug
 - 2026-05-16 提交 git + 推送 `https://github.com/ShawnWu20147/CodeWu`（commit 18bbff5）
+- 2026-05-17 v1.15 PowerShell 版本检测 + system prompt 告知 `&&` 限制：
+  - 实测用户原 prompt「react 开发一个表达对网易程序员勇神崇拜的小程序」端到端跑 9 min：
+    1. v1.13 stdin=DEVNULL 修复确实生效 —— `npx create-react-app yongshen-tribute` 在 ~120s 完整跑通，创建了 `node_modules` / `package.json` / `src` / `public` 等完整脚手架
+    2. 但模型第一次用了 bash 风格 `cd X && npx ...`，PowerShell 5.1 不支持 `&&`，返回 `The token '&&' is not a valid statement separator in this version.` 模型不得不重试一次（浪费 token + 时间）
+    3. 最后模型 write_file 阶段撞到 proxy `RemoteProtocolError`（服务端中断），与 codewu 无关
+  - 启动时 `subprocess.run("$PSVersionTable.PSVersion.Major")` 探一次 PowerShell 主版本（~200ms 一次性成本），结果存 `POWERSHELL_MAJOR`
+  - 根据版本生成 `_SHELL_NOTE` 注入 SYSTEM_PROMPT 的 ENVIRONMENT 段：
+    - PS < 7：明确写「PowerShell 5.x，**不支持 `&&` / `||`**，用 `;` 或分多次 run_cmd」
+    - PS ≥ 7：注明「`&&` / `||` 支持」
+  - 同步 `__version__` 0.1.6 → 0.1.15（之前几个版本只 bump 了 pyproject.toml，忘了 `__init__.py`）
 - 2026-05-17 v1.14 install.ps1 / install.sh 安装脚本：
   - 用户反馈：「`pip install -e .` 在哪儿跑？最好做个安装脚本」
   - 新增 `install.ps1`（Windows PowerShell）：
