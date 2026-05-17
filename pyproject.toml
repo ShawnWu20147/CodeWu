@@ -4,13 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "codewu"
-version = "0.1.6"
-description = "A minimal coding agent prototype: Chat Completions API + 4 local tools, per-call y/n approval, session resume."
+version = "0.1.10"
+description = "A minimal coding agent prototype: Chat Completions API + 5 local tools, per-call y/n approval, session resume, interactive prompt with completion."
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [{ name = "ShawnWu" }]
 dependencies = [
-    "openai>=1.50.0",
+    "openai>=1.50.0,<2",
+    "prompt_toolkit>=3.0.50,<4",
 ]
 
 [project.scripts]

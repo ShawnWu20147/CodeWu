@@ -120,7 +120,8 @@ D:\git-nonwork\CodeWu\
     ├── approval.py            # approve_or_skip + _preview_write
     ├── session.py             # save/load/list/new_session_id + print_history
     ├── slash.py               # SLASH_COMMANDS 注册表 + 各 handler
-    └── loop.py                # call_llm_stream (stream=True) + run_turn + looks_like_promise + auto-continue
+    ├── loop.py                # call_llm_stream (stream=True) + run_turn + looks_like_promise + auto-continue
+    └── repl.py                # prompt_toolkit session: lexer + completer + @file expand (v1.10)
 
 # 运行时数据（v1.4 起全局，跨 cwd 共享）：
 ~/.codewu/sessions/
@@ -188,6 +189,19 @@ D:\git-nonwork\CodeWu\
   - 新增 `--allow-all` CLI flag：跳过 y/n 提示但保留 preview，banner 显眼 ⚠ 警告
   - 顺手修了 `approve_or_skip` 中 `edit` 命令后 `cmd` 变量未刷新的小 bug
 - 2026-05-16 提交 git + 推送 `https://github.com/ShawnWu20147/CodeWu`（commit 18bbff5）
+- 2026-05-17 v1.10 prompt_toolkit 集成（交互体验对齐 Claude Code / Codex）：
+  - 用户澄清依赖政策：「外部依赖」原意指**收费服务**（如 LLM API），开源 Python 包随便引；记得做版本控制防 regression
+  - 加 `prompt_toolkit>=3.0.50,<4` 直接依赖（已实测 3.0.52 在环境中，纯 Python 唯一传递依赖 wcwidth）；`pyproject.toml` 版本 bump 到 0.1.10，`openai` 也加 `<2` 上界
+  - **新模块 `codewu/repl.py`**：
+    - `CodewuLexer`：每字符重染色 —— `!` 行首蓝、`/` 行首青、`@<path>` token magenta（行内只匹配 word boundary，避免 `email@example.com` 误染色）
+    - `CodewuCompleter`：`/h` → `/help` 等 slash 命令名（从 SLASH_COMMANDS dict 拉，display_meta 显 desc）；`@s` → cwd 文件/目录 startswith 过滤（dir 优先，含 `@codewu/c` 子目录穿透）；其他文本不补全
+    - `complete_while_typing=True` —— 每键自动弹补全菜单（这就是 codex/claude code 体验）
+    - 历史持久化到 `~/.codewu/history.txt`（FileHistory，上下键调用）
+    - `prompt_input(msg)` 入口：TTY 走 PromptSession，非 TTY 退回 `input()`（pipe 测试不破）
+  - **`@<path>` 提交时展开**：cli.py 在送 LLM 前 `expand_at_files(line)` —— 找到文件 → 注入 `<file path='X'>...</file>` 块；找不到 → fuzzy 建议（`difflib.get_close_matches`，cutoff 0.4）+ 不发请求，让用户改 typo
+  - 实测：`Look at @pyproject.toml ...` 一句话获得答案，**模型未调 read_file**，省一次 round-trip；典型工作流提速明显
+  - 回归测试通过：piped fallback、/help、/config、/sessions、edit_file、!cmd 侧栏、streaming、resume 等全保留
+  - history.txt 在 `~/.codewu/`（项目外），不进 git
 - 2026-05-17 v1.9 编辑体验 + 视觉区分 + 持久化配置：
   - **新增 `edit_file(path, old_string, new_string)` 工具**：精准定位替换，`old_string` 必须文件中恰好出现一次（0 报「未找到」，≥2 报「不唯一加 context」），强制 UTF-8 编码，禁止空 `old_string` 和 no-op 替换；side-effect 工具，走审批
   - **审批预览全面升级为 `difflib.unified_diff` 红绿染色**：`-` 红 / `+` 绿 / `@@` 黄 / context dim；`write_file` 的 OVERWRITE 分支也用 diff（read 旧内容比新内容）；NEW 分支保持「首 10 行 + 总行数」简介

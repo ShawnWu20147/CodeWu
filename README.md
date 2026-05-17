@@ -75,6 +75,17 @@ codewu --allow-all
 | `/new` | Start a fresh session |
 | `/dump` | Show message count + last 3 message previews (debug) |
 
+### Inline file references — `@path`
+
+Type `@` anywhere in your message to reference a file:
+
+```
+> what does @codewu/cli.py do?
+> compare @SPEC.md and @README.md and suggest fixes
+```
+
+When you press Enter the file contents are inlined into the message (wrapped in `<file path="...">...</file>` blocks) so the agent doesn't need to call `read_file`. While you type, a completion menu of files in the current directory is shown with startswith filtering; `@<dir>/` navigates one level deeper. Typos get caught at submit time with fuzzy suggestions (`did you mean: README.md?`).
+
 ### Bang shortcut — run a shell command directly
 
 Prefix any line with `!` to run it in the shell yourself. The command runs **without approval** (you typed it), the output is shown, and the (`command`, `output`) pair is appended to the conversation context so the agent sees it on the next turn.

@@ -22,6 +22,12 @@ from openai import OpenAI
 from . import config
 from . import ui
 from .loop import run_turn
+from .repl import (
+    attached_summary,
+    expand_at_files,
+    fuzzy_suggest,
+    prompt_input,
+)
 from .session import (
     load_session,
     new_session_id,
@@ -115,12 +121,12 @@ def main() -> int:
         print_history(messages)
 
     turn_count = 0
-    prompt_label = ui.style(">", ui.BOLD, ui.GREEN)
+    prompt_label_plain = "> "  # prompt_toolkit handles its own coloring of the input area
     while True:
         if turn_count > 0:
             print(f"\n{ui.separator()}")
         try:
-            line = input(f"\n{prompt_label} ").strip()
+            line = prompt_input(prompt_label_plain).strip()
         except (EOFError, KeyboardInterrupt):
             print_exit_hint(session_id, messages)
             break
@@ -139,8 +145,28 @@ def main() -> int:
             save_session(session_id, messages)
             continue
 
+        # Expand @<path> tokens into <file> blocks. Abort the turn if any
+        # token does not resolve to a readable file — let the user fix typos
+        # rather than silently sending a literal "@foo.py" to the model.
+        expanded, attached, missing = expand_at_files(line)
+        if missing:
+            print(ui.style(
+                f"[!] file(s) not found: {', '.join('@' + m for m in missing)}",
+                ui.BOLD, ui.RED,
+            ))
+            for tok in missing:
+                hits = fuzzy_suggest(tok)
+                if hits:
+                    print(ui.style(
+                        f"     did you mean: {', '.join('@' + h for h in hits)}?",
+                        ui.DIM,
+                    ))
+            continue
+        if attached:
+            print(ui.style(f"[~] attached: {attached_summary(attached)}", ui.DIM))
+
         user_msg_idx = len(messages)
-        messages.append({"role": "user", "content": line})
+        messages.append({"role": "user", "content": expanded})
         try:
             run_turn(client, messages)
         except KeyboardInterrupt:
