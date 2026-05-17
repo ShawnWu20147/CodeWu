@@ -9,9 +9,12 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import threading
 from pathlib import Path
 from typing import Any
 
+from . import config
+from . import ui
 from .config import CWD, IS_WINDOWS, MAX_OUTPUT_BYTES, SHELL_HINT
 
 
@@ -114,27 +117,96 @@ def tool_edit_file(path: str, old_string: str, new_string: str) -> dict[str, Any
         return _err(f"{type(e).__name__}: {e}")
 
 
-def tool_run_cmd(command: str) -> dict[str, Any]:
+def tool_run_cmd(command: str, timeout_sec: int | None = None) -> dict[str, Any]:
+    """Run a shell command in cwd, streaming stdout/stderr live to the terminal.
+
+    Implementation notes:
+      - We use Popen + two reader threads so the user sees output as it happens
+        (instead of capture_output blocking until the process exits). Output
+        lines are mirrored to the terminal with a dim-blue "│ " sidebar.
+      - Effective timeout = explicit `timeout_sec` arg if provided, else
+        config.DEFAULT_CMD_TIMEOUT_SEC.
+      - On timeout we kill the process and return whatever stdout/stderr we
+        managed to collect so the LLM has context to choose a longer retry.
+    """
+    if timeout_sec is None or timeout_sec <= 0:
+        timeout_sec = config.DEFAULT_CMD_TIMEOUT_SEC
+
     try:
         if IS_WINDOWS:
             argv = ["powershell", "-NoProfile", "-Command", command]
         else:
             argv = ["sh", "-c", command]
-        proc = subprocess.run(
+
+        print(ui.style(f"[~] running (timeout {timeout_sec}s)...", ui.DIM))
+
+        proc = subprocess.Popen(
             argv,
             cwd=str(CWD),
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=120,
+            encoding="utf-8",
+            errors="replace",
+            bufsize=1,  # line-buffered
         )
+
+        stdout_lines: list[str] = []
+        stderr_lines: list[str] = []
+        bar = ui.style("│ ", ui.BLUE)
+        stderr_marker = ui.style("[err] ", ui.RED, ui.DIM)
+
+        def _reader(stream, buf: list[str], stderr: bool) -> None:
+            try:
+                for line in stream:
+                    buf.append(line)
+                    prefix = stderr_marker if stderr else ""
+                    # `end=""` because line keeps its trailing \n
+                    print(f"{bar}{prefix}{line}", end="", flush=True)
+            finally:
+                try:
+                    stream.close()
+                except Exception:
+                    pass
+
+        t_out = threading.Thread(target=_reader, args=(proc.stdout, stdout_lines, False), daemon=True)
+        t_err = threading.Thread(target=_reader, args=(proc.stderr, stderr_lines, True), daemon=True)
+        t_out.start()
+        t_err.start()
+
+        timed_out = False
+        try:
+            returncode = proc.wait(timeout=timeout_sec)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            try:
+                returncode = proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                returncode = -9
+            timed_out = True
+
+        # Make sure the reader threads finish flushing their pipes.
+        t_out.join(timeout=2)
+        t_err.join(timeout=2)
+
+        stdout_text = "".join(stdout_lines)
+        stderr_text = "".join(stderr_lines)
+
+        if timed_out:
+            print(ui.style(f"[!] timed out after {timeout_sec}s — process killed", ui.BOLD, ui.RED))
+            out = (
+                f"TIMED OUT after {timeout_sec}s (process killed; partial output below)\n"
+                f"--- stdout (partial) ---\n{stdout_text}"
+                f"--- stderr (partial) ---\n{stderr_text}"
+            )
+            return _err(out)
+
         out = (
-            f"exit_code: {proc.returncode}\n"
-            f"--- stdout ---\n{proc.stdout}"
-            f"--- stderr ---\n{proc.stderr}"
+            f"exit_code: {returncode}\n"
+            f"--- stdout ---\n{stdout_text}"
+            f"--- stderr ---\n{stderr_text}"
         )
         return _ok(out)
-    except subprocess.TimeoutExpired:
-        return _err("command timed out after 120s")
     except Exception as e:
         return _err(f"{type(e).__name__}: {e}")
 
@@ -219,12 +291,28 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
             "name": "run_cmd",
             "description": (
                 f"Run a shell command via {SHELL_HINT} in the working directory. "
-                "Captures stdout, stderr and exit code. Requires user approval."
+                "Streams stdout / stderr live to the user and returns exit code "
+                f"+ captured output. Default timeout is {config.DEFAULT_CMD_TIMEOUT_SEC}s; "
+                "pass a longer timeout_sec for operations that legitimately take longer "
+                "(npm install ~300, pip install ~180, docker build ~600, large test "
+                "suites ~300). Requires user approval."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "command": {"type": "string", "description": f"The {SHELL_HINT} command to execute."},
+                    "command": {
+                        "type": "string",
+                        "description": f"The {SHELL_HINT} command to execute.",
+                    },
+                    "timeout_sec": {
+                        "type": "integer",
+                        "description": (
+                            "Maximum seconds to allow before the process is killed. "
+                            "Omit (or 0) to use the configured default. Set explicitly "
+                            "for slow operations like installs, builds, or large test runs."
+                        ),
+                        "minimum": 1,
+                    },
                 },
                 "required": ["command"],
             },

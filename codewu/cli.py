@@ -40,8 +40,10 @@ from .tools import tool_run_cmd
 def handle_bang(line: str, messages: list[dict[str, Any]]) -> None:
     """Run a shell command directly and append its output to the conversation.
 
-    The whole bang interaction is rendered with a dim-blue side-bar so it's
-    visually distinct from agent / tool messages.
+    tool_run_cmd now streams stdout/stderr live with a dim-blue side-bar, so
+    we just print the command header and let the streaming do the rest. The
+    captured output is appended to the message history for the LLM to see on
+    the next turn.
     """
     cmd = line[1:].strip()
     if not cmd:
@@ -54,11 +56,6 @@ def handle_bang(line: str, messages: list[dict[str, Any]]) -> None:
     print(label)
     result = tool_run_cmd(cmd)
     output = result.get("result") or result.get("error") or ""
-    # Prefix every output line with a dim-blue side-bar so bang output is
-    # visually distinct from agent text or tool previews.
-    bar = ui.style("│ ", ui.BLUE)
-    for ln in output.splitlines() or [""]:
-        print(f"{bar}{ln}")
     messages.append({
         "role": "user",
         "content": f"[I ran: {cmd}]\n{output}",

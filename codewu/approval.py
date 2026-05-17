@@ -173,13 +173,18 @@ def approve_or_skip(name: str, args: dict[str, Any]) -> tuple[bool, dict[str, An
                 return False, args
 
     if name == "run_cmd":
+        def _render_cmd_header(args_):
+            cmd = args_.get("command", "")
+            timeout = args_.get("timeout_sec") or config.DEFAULT_CMD_TIMEOUT_SEC
+            print(ui.style("[Cmd]", ui.BOLD, ui.YELLOW) + f" {cmd}")
+            print(ui.style(f"      timeout: {timeout}s", ui.DIM))
+
         if config.ALLOW_ALL:
-            print(ui.style("[Cmd]", ui.BOLD, ui.YELLOW) + f" {args.get('command', '')}")
+            _render_cmd_header(args)
             print(_prompt_label("Approve cmd?") + " " + ui.style("[auto-approved]", ui.DIM))
             return True, args
         while True:
-            cmd = args.get("command", "")
-            print(ui.style("[Cmd]", ui.BOLD, ui.YELLOW) + f" {cmd}")
+            _render_cmd_header(args)
             choice = input(_prompt_label("Approve cmd? [y/n/edit]: ")).strip().lower()
             if choice in {"y", "yes"}:
                 return True, args

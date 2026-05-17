@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "codewu"
-version = "0.1.11"
-description = "A minimal coding agent prototype: Chat Completions API + 5 local tools, per-call y/n approval, session resume, interactive prompt with completion + configurable history."
+version = "0.1.12"
+description = "A minimal coding agent prototype: Chat Completions API + 5 local tools, per-call y/n approval, session resume, interactive prompt with completion + configurable history + streaming command exec with timeouts."
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [{ name = "ShawnWu" }]

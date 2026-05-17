@@ -39,30 +39,41 @@ CONFIG_FILE = Path.home() / ".codewu" / "config.json"
 DEFAULT_HISTORY_FILE = Path.home() / ".codewu" / "history.txt"
 
 
-_CONFIG_TEMPLATE = {
-    "_comment": (
-        "CodeWu config. Edit any key to override its built-in default. "
-        "null means 'use the default'. Environment variables (CODEWU_*) "
-        "override this file. Run /config in CodeWu to see current effective "
-        "values and their sources."
-    ),
-    "base_url": None,
-    "model": None,
-    "api_key": None,
-    "history": None,
-    "history_file": None,
+# Single source of truth for built-in defaults. Used both when generating the
+# template config.json at first run AND as fallback when a key is missing
+# (or null) in the user's file.
+_DEFAULTS: dict[str, Any] = {
+    "base_url": "http://localhost:4141/v1",
+    "model": "claude-opus-4.6-1m",
+    "api_key": "placeholder-not-used-by-proxy",
+    "history": True,
+    "history_file": str(DEFAULT_HISTORY_FILE),
+    "default_cmd_timeout_sec": 60,
 }
 
 
+def _build_config_template() -> dict[str, Any]:
+    return {
+        "_comment": (
+            "CodeWu config. These are your current settings. Edit any value "
+            "to override it; remove a key (or set it to null) to fall back to "
+            "the built-in default. Environment variables (CODEWU_*) take "
+            "precedence over this file. Run /config in CodeWu to see current "
+            "effective values and their sources."
+        ),
+        **_DEFAULTS,
+    }
+
+
 def _maybe_init_config_file() -> None:
-    """Create ~/.codewu/config.json with a template on first run.
+    """Create ~/.codewu/config.json with real default values on first run.
     Existing files are left untouched. Filesystem errors are silent."""
     if CONFIG_FILE.exists():
         return
     try:
         CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
         CONFIG_FILE.write_text(
-            json.dumps(_CONFIG_TEMPLATE, indent=2),
+            json.dumps(_build_config_template(), indent=2),
             encoding="utf-8",
         )
     except Exception:
@@ -123,24 +134,50 @@ def _resolve_bool(env_name: str, config_key: str, default: bool) -> tuple[bool, 
     return default, "default"
 
 
-BASE_URL, BASE_URL_SRC = _resolve("CODEWU_BASE_URL", "base_url", "http://localhost:4141/v1")
-MODEL, MODEL_SRC = _resolve("CODEWU_MODEL", "model", "claude-opus-4.6-1m")
-API_KEY, API_KEY_SRC = _resolve("CODEWU_API_KEY", "api_key", "placeholder-not-used-by-proxy")
+def _resolve_int(env_name: str, config_key: str, default: int) -> tuple[int, str]:
+    """Same as _resolve but parses integers; bad values silently fall through."""
+    if env_name in os.environ:
+        try:
+            return int(os.environ[env_name]), f"env: {env_name}"
+        except ValueError:
+            pass
+    v = _user_config.get(config_key)
+    if v is not None:
+        try:
+            return int(v), "file"
+        except (ValueError, TypeError):
+            pass
+    return default, "default"
 
-HISTORY_ENABLED, HISTORY_ENABLED_SRC = _resolve_bool("CODEWU_HISTORY", "history", True)
+
+BASE_URL, BASE_URL_SRC = _resolve("CODEWU_BASE_URL", "base_url", _DEFAULTS["base_url"])
+MODEL, MODEL_SRC = _resolve("CODEWU_MODEL", "model", _DEFAULTS["model"])
+API_KEY, API_KEY_SRC = _resolve("CODEWU_API_KEY", "api_key", _DEFAULTS["api_key"])
+
+HISTORY_ENABLED, HISTORY_ENABLED_SRC = _resolve_bool(
+    "CODEWU_HISTORY", "history", _DEFAULTS["history"]
+)
 _history_file_raw, _history_file_src = _resolve(
-    "CODEWU_HISTORY_FILE", "history_file", str(DEFAULT_HISTORY_FILE),
+    "CODEWU_HISTORY_FILE", "history_file", _DEFAULTS["history_file"],
 )
 HISTORY_FILE_PATH = Path(_history_file_raw).expanduser()
 HISTORY_FILE_SRC = _history_file_src
+
+DEFAULT_CMD_TIMEOUT_SEC, DEFAULT_CMD_TIMEOUT_SEC_SRC = _resolve_int(
+    "CODEWU_CMD_TIMEOUT_SEC",
+    "default_cmd_timeout_sec",
+    _DEFAULTS["default_cmd_timeout_sec"],
+)
 
 
 def config_summary() -> list[tuple[str, str, str]]:
     """List of (key, displayed_value, source) for the /config command.
     api_key is masked unless it's the obvious placeholder.
     """
-    if API_KEY_SRC == "default":
-        api_display = API_KEY  # placeholder is not a secret
+    # Show the literal placeholder (it's not a secret); mask any other value
+    # regardless of where it came from.
+    if API_KEY == _DEFAULTS["api_key"]:
+        api_display = API_KEY
     else:
         api_display = "<set>"
 
@@ -153,6 +190,7 @@ def config_summary() -> list[tuple[str, str, str]]:
         ("api_key", api_display, API_KEY_SRC),
         ("history", history_display, HISTORY_ENABLED_SRC),
         ("history_file", history_file_display, HISTORY_FILE_SRC if HISTORY_ENABLED else "—"),
+        ("default_cmd_timeout_sec", f"{DEFAULT_CMD_TIMEOUT_SEC}s", DEFAULT_CMD_TIMEOUT_SEC_SRC),
     ]
 
 
@@ -204,7 +242,15 @@ TOOLS
                                 context lines if a short snippet isn't unique);
                                 make multiple edit_file calls for multiple
                                 changes to one file.
-- run_cmd(command)            — run a shell command in cwd. Side-effect.
+- run_cmd(command, timeout_sec?) — run a shell command in cwd. Side-effect.
+                                Optional integer `timeout_sec` overrides the
+                                default ({DEFAULT_CMD_TIMEOUT_SEC}s). Pass a
+                                LONGER timeout for slow operations: e.g.
+                                `npm install` → 300, `pip install -e .` → 180,
+                                `docker build` → 600, `pytest` over a large
+                                suite → 300. Do NOT just retry the default
+                                when something times out — diagnose what's
+                                slow and choose an appropriate value.
 
 PATH RULES
 - All paths are relative to the working directory shown above. Stay inside it.

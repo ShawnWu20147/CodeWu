@@ -189,6 +189,18 @@ D:\git-nonwork\CodeWu\
   - 新增 `--allow-all` CLI flag：跳过 y/n 提示但保留 preview，banner 显眼 ⚠ 警告
   - 顺手修了 `approve_or_skip` 中 `edit` 命令后 `cmd` 变量未刷新的小 bug
 - 2026-05-16 提交 git + 推送 `https://github.com/ShawnWu20147/CodeWu`（commit 18bbff5）
+- 2026-05-17 v1.12 命令执行 UX 改造（用户反馈 npx create-react-app 「一直卡着」）：
+  - **`tool_run_cmd` 改用 `Popen` + 两个 daemon 线程逐行读 stdout/stderr**，实时打印 `│ ` dim blue 侧栏前缀（与 `!cmd` 一致风格）。用户跑 `npm install` 等长命令时能看到进度，不再「黑屏等」
+  - 进入命令前打印 `[~] running (timeout Xs)...`，让用户知道边界
+  - 超时干净 kill + `proc.wait(timeout=5)` 收尸；超时输出红色 `[!] timed out after Xs — process killed`；tool result 含部分 stdout/stderr 给 LLM 决策
+  - **`timeout_sec` 加入 `run_cmd` tool schema**（optional integer，minimum 1）；JSON schema 提示 LLM「install ~300、build ~600 等」；`SYSTEM_PROMPT` 中 `run_cmd` 段落同步补充
+  - **新增 config 键 `default_cmd_timeout_sec`**（默认 60s，比原硬编码 120 更激进）；env `CODEWU_CMD_TIMEOUT_SEC` 覆盖
+  - 优先级链：tool_call.timeout_sec arg > env > config 文件 > 内置 default
+  - **`_DEFAULTS` 集中真实默认值字典**，作为「模板生成」和「resolve fallback」的 single source of truth
+  - **config.json 模板写入实际默认值**（不再是 null）—— 用户一打开就看到当前默认是啥，比 null 友好得多。null 仍当「未设置」处理（让用户能显式 revert 某项）
+  - api_key 显示从「按 source 判断」改为「按值判断」：只要值等于内置 placeholder 就显示明文（不论来自 file 还是 default），否则 `<set>`
+  - `handle_bang` 删除重复打印（live stream 已在 `tool_run_cmd` 中处理，避免双打）
+  - bump 0.1.11 → 0.1.12
 - 2026-05-17 v1.11 history 开关 + 首次自动建 config 模板：
   - **`~/.codewu/config.json` 首次启动自动建模板**（所有键设为 `null` + `_comment` 字段说明），让用户立刻能找到要编辑哪里；已存在则不动
   - **`_resolve` 把 `null` 视作未设置**，走 default —— 模板里的 null 是 no-op，等用户改成实值才生效
