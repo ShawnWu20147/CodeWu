@@ -189,6 +189,14 @@ D:\git-nonwork\CodeWu\
   - 新增 `--allow-all` CLI flag：跳过 y/n 提示但保留 preview，banner 显眼 ⚠ 警告
   - 顺手修了 `approve_or_skip` 中 `edit` 命令后 `cmd` 变量未刷新的小 bug
 - 2026-05-16 提交 git + 推送 `https://github.com/ShawnWu20147/CodeWu`（commit 18bbff5）
+- 2026-05-17 v1.16 Windows 超时改用 `taskkill /F /T` 杀进程树：
+  - 用户反馈：CodeWu 自己 timeout 触发的 kill 失败，孙进程（PowerShell → npm.cmd → node.exe → workers）在 task manager 里仍然活着
+  - 根因：Python `Popen.kill()` 在 Windows 上调 `TerminateProcess` 只杀直接子进程，不递归。所以我们的 PowerShell 死了但它派生出的 node/npm 进程变孤儿继续跑
+  - **不需要 admin 修**——用 `taskkill /F /T /PID <pid>` 杀整树，对自己拥有的进程不要求提升权限
+  - 新增 `_kill_process_tree(proc)` helper：Windows 路径优先 taskkill，失败 fallback 到 `proc.kill()`；POSIX 走原路径
+  - `tool_run_cmd` 超时分支 `proc.kill()` → `_kill_process_tree(proc)`
+  - 端到端测试：parent PowerShell 启 `ping -t` 子进程（无限运行），trigger 3s timeout，**确认子 ping 进程在 timeout-kill 后死亡**
+  - Sync `__version__` 0.1.15 → 0.1.16
 - 2026-05-17 v1.15 PowerShell 版本检测 + system prompt 告知 `&&` 限制：
   - 实测用户原 prompt「react 开发一个表达对网易程序员勇神崇拜的小程序」端到端跑 9 min：
     1. v1.13 stdin=DEVNULL 修复确实生效 —— `npx create-react-app yongshen-tribute` 在 ~120s 完整跑通，创建了 `node_modules` / `package.json` / `src` / `public` 等完整脚手架

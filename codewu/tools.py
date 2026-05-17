@@ -117,6 +117,32 @@ def tool_edit_file(path: str, old_string: str, new_string: str) -> dict[str, Any
         return _err(f"{type(e).__name__}: {e}")
 
 
+def _kill_process_tree(proc: "subprocess.Popen") -> None:
+    """Kill the process and (on Windows) all of its descendants.
+
+    Popen.kill() on Windows only terminates the immediate child (e.g. the
+    PowerShell we spawned), leaving grandchildren (npm.cmd → node.exe → workers)
+    as orphans that keep running. `taskkill /F /T /PID <pid>` walks the whole
+    tree and force-kills it, no admin rights needed for processes we own.
+    On POSIX, plain Popen.kill() handles our use cases.
+    """
+    if IS_WINDOWS:
+        try:
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                timeout=5,
+            )
+            return
+        except Exception:
+            pass  # fall through to plain kill below
+    try:
+        proc.kill()
+    except Exception:
+        pass
+
+
 def tool_run_cmd(command: str, timeout_sec: int | None = None) -> dict[str, Any]:
     """Run a shell command in cwd, streaming stdout/stderr live to the terminal.
 
@@ -186,7 +212,7 @@ def tool_run_cmd(command: str, timeout_sec: int | None = None) -> dict[str, Any]
         try:
             returncode = proc.wait(timeout=timeout_sec)
         except subprocess.TimeoutExpired:
-            proc.kill()
+            _kill_process_tree(proc)
             try:
                 returncode = proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
