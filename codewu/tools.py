@@ -71,6 +71,49 @@ def tool_list_dir(path: str) -> dict[str, Any]:
         return _err(f"{type(e).__name__}: {e}")
 
 
+def tool_edit_file(path: str, old_string: str, new_string: str) -> dict[str, Any]:
+    """Replace exactly one occurrence of old_string with new_string in `path`.
+
+    Constraints (enforced for safety + determinism):
+      - File must exist and be UTF-8 text.
+      - old_string must be non-empty.
+      - old_string must occur in the file *exactly once*. If it doesn't,
+        we return a clear error so the model can add more surrounding context.
+      - old_string == new_string is rejected as a no-op.
+    """
+    try:
+        p = resolve_path(path)
+        if not p.exists():
+            return _err(f"file not found: {p}")
+        if not p.is_file():
+            return _err(f"not a file: {p}")
+        if not old_string:
+            return _err("old_string must not be empty")
+        if old_string == new_string:
+            return _err("old_string and new_string are identical (no-op)")
+        try:
+            content = p.read_text(encoding="utf-8", errors="strict")
+        except UnicodeDecodeError:
+            return _err(f"file is not valid UTF-8 text: {p}")
+        n = content.count(old_string)
+        if n == 0:
+            return _err(f"old_string not found in {p}")
+        if n > 1:
+            return _err(
+                f"old_string appears {n} times in {p}; "
+                "add more surrounding context to make it unique"
+            )
+        new_content = content.replace(old_string, new_string, 1)
+        p.write_text(new_content, encoding="utf-8")
+        return _ok(
+            f"edited {p}: replaced 1 occurrence "
+            f"({len(old_string)} → {len(new_string)} chars; "
+            f"file {len(content)}B → {len(new_content)}B)"
+        )
+    except Exception as e:
+        return _err(f"{type(e).__name__}: {e}")
+
+
 def tool_run_cmd(command: str) -> dict[str, Any]:
     try:
         if IS_WINDOWS:
@@ -115,7 +158,11 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "write_file",
-            "description": "Write (or overwrite) a text file. Parent directories are created if missing. Requires user approval.",
+            "description": (
+                "Create a new file or fully replace an existing file's contents. "
+                "Prefer edit_file for changing existing files — write_file should "
+                "only be used for new files or full rewrites. Requires user approval."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -123,6 +170,32 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                     "content": {"type": "string", "description": "Full file content to write."},
                 },
                 "required": ["path", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "edit_file",
+            "description": (
+                "Edit an existing file by replacing EXACTLY ONE occurrence of "
+                "old_string with new_string. This is the preferred way to change "
+                "an existing file; do not use write_file to rewrite a whole file "
+                "just to change a few lines.\n\n"
+                "Constraints:\n"
+                "  - old_string must match the file exactly, including whitespace and indentation.\n"
+                "  - old_string must appear in the file exactly ONCE. If a short "
+                "snippet isn't unique, include surrounding context lines until it is.\n"
+                "  - For multiple changes to the same file, make multiple edit_file calls."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "File path, relative to the working directory."},
+                    "old_string": {"type": "string", "description": "Exact text to find (must appear once)."},
+                    "new_string": {"type": "string", "description": "Replacement text."},
+                },
+                "required": ["path", "old_string", "new_string"],
             },
         },
     },
@@ -161,7 +234,7 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
 
 
 TOOLS_READONLY = frozenset({"read_file", "list_dir"})
-TOOLS_SIDE_EFFECT = frozenset({"write_file", "run_cmd"})
+TOOLS_SIDE_EFFECT = frozenset({"write_file", "edit_file", "run_cmd"})
 
 
 def dispatch_tool(name: str, raw_args: str) -> dict[str, Any]:
@@ -183,6 +256,8 @@ def dispatch_tool(name: str, raw_args: str) -> dict[str, Any]:
         return tool_read_file(**args)
     if name == "write_file":
         return tool_write_file(**args)
+    if name == "edit_file":
+        return tool_edit_file(**args)
     if name == "list_dir":
         return tool_list_dir(**args)
     if name == "run_cmd":

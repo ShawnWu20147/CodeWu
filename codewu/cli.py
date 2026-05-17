@@ -32,7 +32,11 @@ from .tools import tool_run_cmd
 
 
 def handle_bang(line: str, messages: list[dict[str, Any]]) -> None:
-    """Run a shell command directly and append its output to the conversation."""
+    """Run a shell command directly and append its output to the conversation.
+
+    The whole bang interaction is rendered with a dim-blue side-bar so it's
+    visually distinct from agent / tool messages.
+    """
     cmd = line[1:].strip()
     if not cmd:
         print(ui.style(
@@ -44,7 +48,11 @@ def handle_bang(line: str, messages: list[dict[str, Any]]) -> None:
     print(label)
     result = tool_run_cmd(cmd)
     output = result.get("result") or result.get("error") or ""
-    print(output)
+    # Prefix every output line with a dim-blue side-bar so bang output is
+    # visually distinct from agent text or tool previews.
+    bar = ui.style("│ ", ui.BLUE)
+    for ln in output.splitlines() or [""]:
+        print(f"{bar}{ln}")
     messages.append({
         "role": "user",
         "content": f"[I ran: {cmd}]\n{output}",

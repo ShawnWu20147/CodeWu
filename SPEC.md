@@ -38,14 +38,15 @@ User → CodeWu REPL
                        （write/run 需 y/n）
 ```
 
-## 5. Tool Inventory（v1 仅 4 个）
+## 5. Tool Inventory（v1.9: 5 个）
 
-| 工具 | 用途 | 副作用 | 需 y/n |
-|---|---|---|---|
-| `read_file(path)` | 读文件全文 | 无 | 否 |
-| `write_file(path, content)` | 覆盖写文件 | 有（写盘） | **是** |
-| `list_dir(path)` | 列目录（一层） | 无 | 否 |
-| `run_cmd(command)` | 执行 shell（Windows PowerShell / POSIX sh 自动选择） | 任意 | **是** |
+| 工具 | 用途 | 副作用 | 需 y/n | 预览 |
+|---|---|---|---|---|
+| `read_file(path)` | 读文件全文 | 无 | 否 | — |
+| `list_dir(path)` | 列目录（一层） | 无 | 否 | — |
+| `write_file(path, content)` | 创建新文件或彻底重写 | 写盘 | **是** | NEW: 前 10 行；OVERWRITE: unified diff |
+| `edit_file(path, old, new)` | 精准替换（v1.9 加入）；`old` 须文件中恰好出现 1 次 | 写盘 | **是** | unified diff |
+| `run_cmd(command)` | shell（PowerShell / sh） | 任意 | **是** | 命令字符串 |
 
 每个工具有：
 - 明确 JSON Schema 给 LLM（OpenAI tool calling 格式）
@@ -187,6 +188,16 @@ D:\git-nonwork\CodeWu\
   - 新增 `--allow-all` CLI flag：跳过 y/n 提示但保留 preview，banner 显眼 ⚠ 警告
   - 顺手修了 `approve_or_skip` 中 `edit` 命令后 `cmd` 变量未刷新的小 bug
 - 2026-05-16 提交 git + 推送 `https://github.com/ShawnWu20147/CodeWu`（commit 18bbff5）
+- 2026-05-17 v1.9 编辑体验 + 视觉区分 + 持久化配置：
+  - **新增 `edit_file(path, old_string, new_string)` 工具**：精准定位替换，`old_string` 必须文件中恰好出现一次（0 报「未找到」，≥2 报「不唯一加 context」），强制 UTF-8 编码，禁止空 `old_string` 和 no-op 替换；side-effect 工具，走审批
+  - **审批预览全面升级为 `difflib.unified_diff` 红绿染色**：`-` 红 / `+` 绿 / `@@` 黄 / context dim；`write_file` 的 OVERWRITE 分支也用 diff（read 旧内容比新内容）；NEW 分支保持「首 10 行 + 总行数」简介
+  - SYSTEM_PROMPT 加 `edit_file` 段落 + 规则：「修改已有文件用 edit_file，新建/彻底重写才用 write_file；不唯一时加 context 行；多处改用多次 edit_file 调用」
+  - 端到端实测：模型自觉做 2 次 edit_file（def + call site 分开），每次 diff 预览清晰
+  - **`!cmd` 输出加 dim blue `│ ` 侧栏前缀**：bang 输出视觉像 blockquote，与 agent / tool 消息一眼分离
+  - **新增 `~/.codewu/config.json` 持久化配置**：JSON 顶层 dict，支持 `base_url` / `model` / `api_key`；将来加 mcp_servers 等键不破坏老版本；malformed 不 crash 但启动时记 `CONFIG_LOAD_ERROR`
+  - 优先级链：**env var > config 文件 > 内置 default**；每个 setting 记 `_SRC` 用于 /config 显示
+  - 新 slash 命令 `/config`：表格显示当前 effective config（key / value / source）+ 文件路径 + exists 状态 + 优先级说明；api_key 非 default 来源时显示 `<set>` 不漏密
+  - 不做 `/set` 写命令——靠编辑器直接改 JSON，避免误改坏
 - 2026-05-17 v1.8 用户要求加流式（v1.5 之前 `[~] thinking...` 静态条 UX 不够好）：
   - 探测反代：`stream=true` 支持（haiku 实测 20+ 个 delta chunk）；tool_calls 按 `index` 拼接（name 在首块、arguments 增量追加）；usage 走最终 chunk；`thinking`/`reasoning` 参数被默吃、无独立 reasoning_content 字段 → 思维链单独 UI 不做
   - `codewu/loop.py` 中 `call_llm` → `call_llm_stream`（stream=True）：

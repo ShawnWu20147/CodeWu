@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from . import config
 from . import ui
 from .config import SYSTEM_PROMPT
 from .session import (
@@ -94,6 +95,31 @@ def _cmd_dump(arg, sid, msgs):
     return sid, msgs, False
 
 
+def _cmd_config(arg, sid, msgs):
+    rows = config.config_summary()
+    if config.CONFIG_LOAD_ERROR:
+        print(ui.style(f"[!] config file load error: {config.CONFIG_LOAD_ERROR}", ui.BOLD, ui.RED))
+    print(ui.style("Effective configuration:", ui.BOLD))
+    key_w = max(len(k) for k, _, _ in rows)
+    val_w = max(len(v) for _, v, _ in rows)
+    for key, value, src in rows:
+        val_styled = ui.style(f"{value:<{val_w}}", ui.CYAN)
+        src_styled = ui.style(f"({src})", ui.DIM)
+        print(f"  {key:<{key_w}}  {val_styled}  {src_styled}")
+    print()
+    path_str = ui.style(str(config.CONFIG_FILE), ui.CYAN)
+    if config.CONFIG_FILE.exists():
+        status = ui.style("(exists — edit to override defaults)", ui.DIM)
+    else:
+        status = ui.style("(not present — create this file to override defaults)", ui.DIM)
+    print(f"Config file: {path_str}  {status}")
+    print(ui.style(
+        "  Precedence: environment variable > config file > built-in default.",
+        ui.DIM,
+    ))
+    return sid, msgs, False
+
+
 def _cmd_help(arg, sid, msgs):
     width = max(
         len(name) + (len(meta["arg_hint"]) + 1 if meta["arg_hint"] else 0)
@@ -109,6 +135,7 @@ def _cmd_help(arg, sid, msgs):
 
 SLASH_COMMANDS: dict[str, dict[str, Any]] = {
     "/help":     {"arg_hint": "",     "desc": "Show this help",                                  "handler": _cmd_help},
+    "/config":   {"arg_hint": "",     "desc": "Show effective config (env > ~/.codewu/config.json > default)", "handler": _cmd_config},
     "/resume":   {"arg_hint": "[id]", "desc": "Resume a saved session (latest if id omitted)",   "handler": _cmd_resume},
     "/sessions": {"arg_hint": "",     "desc": "List saved sessions in ~/.codewu/sessions/",      "handler": _cmd_sessions},
     "/new":      {"arg_hint": "",     "desc": "Discard current session and start fresh",         "handler": _cmd_new},

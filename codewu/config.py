@@ -7,11 +7,13 @@ ALLOW_ALL`) so they always see the current value.
 
 from __future__ import annotations
 
+import json
 import os
 import platform
 import sys
 from datetime import date
 from pathlib import Path
+from typing import Any
 
 
 # Force UTF-8 on Windows consoles so emoji / box-drawing chars don't blow up.
@@ -23,9 +25,67 @@ for _stream in (sys.stdout, sys.stderr):
             pass
 
 
-BASE_URL = os.environ.get("CODEWU_BASE_URL", "http://localhost:4141/v1")
-MODEL = os.environ.get("CODEWU_MODEL", "claude-opus-4.6-1m")
-API_KEY = os.environ.get("CODEWU_API_KEY", "placeholder-not-used-by-proxy")
+# ---------------------------------------------------------------------------
+# Persistent user config: ~/.codewu/config.json
+#
+# Future-readiness: this file is a free-form JSON dict; we currently consume
+# base_url / model / api_key, but you can add nested keys (e.g. "mcp_servers")
+# without breaking older versions.
+#
+# Precedence at resolve time: env var > config file > built-in default.
+# ---------------------------------------------------------------------------
+
+CONFIG_FILE = Path.home() / ".codewu" / "config.json"
+
+
+def _load_user_config() -> tuple[dict[str, Any], str | None]:
+    """Returns (config_dict, error_message_if_malformed_else_None)."""
+    if not CONFIG_FILE.exists():
+        return {}, None
+    try:
+        text = CONFIG_FILE.read_text(encoding="utf-8")
+    except Exception as e:
+        return {}, f"could not read {CONFIG_FILE}: {type(e).__name__}: {e}"
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as e:
+        return {}, f"malformed JSON in {CONFIG_FILE}: {e}"
+    if not isinstance(data, dict):
+        return {}, f"{CONFIG_FILE} must contain a JSON object at the top level"
+    return data, None
+
+
+_user_config, CONFIG_LOAD_ERROR = _load_user_config()
+
+
+def _resolve(env_name: str, config_key: str, default: str) -> tuple[str, str]:
+    """Resolve a setting from env > file > default. Returns (value, source)."""
+    if env_name in os.environ:
+        return os.environ[env_name], f"env: {env_name}"
+    if config_key in _user_config:
+        return str(_user_config[config_key]), f"file"
+    return default, "default"
+
+
+BASE_URL, BASE_URL_SRC = _resolve("CODEWU_BASE_URL", "base_url", "http://localhost:4141/v1")
+MODEL, MODEL_SRC = _resolve("CODEWU_MODEL", "model", "claude-opus-4.6-1m")
+API_KEY, API_KEY_SRC = _resolve("CODEWU_API_KEY", "api_key", "placeholder-not-used-by-proxy")
+
+
+def config_summary() -> list[tuple[str, str, str]]:
+    """List of (key, displayed_value, source) for the /config command.
+    The api_key is masked unless it's the obvious placeholder.
+    """
+    if API_KEY_SRC == "default":
+        api_display = API_KEY  # placeholder is not a secret
+    else:
+        api_display = "<set>"
+    return [
+        ("base_url", BASE_URL, BASE_URL_SRC),
+        ("model", MODEL, MODEL_SRC),
+        ("api_key", api_display, API_KEY_SRC),
+    ]
+
 
 CWD = Path(os.getcwd()).resolve()
 SESSION_DIR = Path.home() / ".codewu" / "sessions"  # global, shared across cwds
@@ -60,10 +120,22 @@ ENVIRONMENT
 ═══════════════════════════════════════════════════════════════════════════
 TOOLS
 ═══════════════════════════════════════════════════════════════════════════
-- read_file(path)            — load an existing file before changing it.
-- list_dir(path)             — see what's in a directory (one level).
-- write_file(path, content)  — create or overwrite a text file. Side-effect.
-- run_cmd(command)           — run a shell command in cwd. Side-effect.
+- read_file(path)             — load an existing file before changing it.
+- list_dir(path)              — see what's in a directory (one level).
+- write_file(path, content)   — create a NEW file or fully rewrite an existing
+                                one. Side-effect. Do not use this just to change
+                                a few lines of a large file.
+- edit_file(path, old_string, new_string) — change an existing file by
+                                replacing exactly one occurrence of old_string
+                                with new_string. This is the PREFERRED way to
+                                modify existing files. Side-effect.
+                                Constraints: old_string must match exactly
+                                (incl. whitespace); old_string must appear
+                                EXACTLY ONCE in the file (add surrounding
+                                context lines if a short snippet isn't unique);
+                                make multiple edit_file calls for multiple
+                                changes to one file.
+- run_cmd(command)            — run a shell command in cwd. Side-effect.
 
 PATH RULES
 - All paths are relative to the working directory shown above. Stay inside it.
