@@ -189,6 +189,12 @@ D:\git-nonwork\CodeWu\
   - 新增 `--allow-all` CLI flag：跳过 y/n 提示但保留 preview，banner 显眼 ⚠ 警告
   - 顺手修了 `approve_or_skip` 中 `edit` 命令后 `cmd` 变量未刷新的小 bug
 - 2026-05-16 提交 git + 推送 `https://github.com/ShawnWu20147/CodeWu`（commit 18bbff5）
+- 2026-05-17 v1.13 修「`npm init -y` 等命令在交互 TTY 下挂起」：
+  - 用户反馈：cmd 里直接跑 `npm init -y 2>&1` 秒成，codewu 里跑就一直 timeout
+  - 复现：用 codewu 的 Popen 精确配置在 pipe stdin 下跑都正常（< 3 秒），但用户的 codewu 是交互 TTY 启动的，**子进程继承用户终端的 TTY 作为 stdin**，prompt_toolkit 又对终端状态做过手脚，npm 或其子进程（cmd → node）看到 TTY 可能进入交互/检测分支挂起
+  - **Surgical fix：`Popen` 加 `stdin=subprocess.DEVNULL`**——子进程拿到 EOF stdin，跟非交互 shell 行为一致；我们的 tool 模型本来就不支持子进程读 user 输入，DEVNULL 反而是更正确的语义
+  - 回归测试 3/3：基础 `!echo`、流式 5x sleep、timeout 提前 kill 全部通过
+  - bump 0.1.12 → 0.1.13
 - 2026-05-17 v1.12 命令执行 UX 改造（用户反馈 npx create-react-app 「一直卡着」）：
   - **`tool_run_cmd` 改用 `Popen` + 两个 daemon 线程逐行读 stdout/stderr**，实时打印 `│ ` dim blue 侧栏前缀（与 `!cmd` 一致风格）。用户跑 `npm install` 等长命令时能看到进度，不再「黑屏等」
   - 进入命令前打印 `[~] running (timeout Xs)...`，让用户知道边界

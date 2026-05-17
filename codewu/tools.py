@@ -143,6 +143,14 @@ def tool_run_cmd(command: str, timeout_sec: int | None = None) -> dict[str, Any]
         proc = subprocess.Popen(
             argv,
             cwd=str(CWD),
+            # Detach stdin from the user's terminal: when run interactively,
+            # the child (PowerShell → npm → node …) inherits the user's TTY
+            # and may sit waiting on phantom input even with non-interactive
+            # flags like `npm init -y`. Giving the child a closed stdin makes
+            # it behave the same way it does when run from a non-interactive
+            # shell. We don't currently surface child stdin to the user
+            # anyway, so this matches the tool's actual semantics.
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
