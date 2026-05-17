@@ -35,7 +35,7 @@ from . import ui
 try:
     from prompt_toolkit import PromptSession
     from prompt_toolkit.completion import Completer, Completion
-    from prompt_toolkit.history import FileHistory
+    from prompt_toolkit.history import FileHistory, InMemoryHistory
     from prompt_toolkit.lexers import Lexer
     from prompt_toolkit.styles import Style
     _HAVE_PROMPT_TOOLKIT = True
@@ -45,8 +45,7 @@ except Exception:
     Completer = object  # type: ignore[assignment]
     Lexer = object  # type: ignore[assignment]
 
-
-HISTORY_FILE = Path.home() / ".codewu" / "history.txt"
+from . import config
 
 
 # A token is `@` immediately followed by a path-like sequence. We only treat it
@@ -200,18 +199,31 @@ if _HAVE_PROMPT_TOOLKIT:
 _session = None
 
 
+def _build_history():
+    """Pick a prompt_toolkit History backend based on user config."""
+    if not config.HISTORY_ENABLED:
+        return InMemoryHistory()
+    path = config.HISTORY_FILE_PATH
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return FileHistory(str(path))
+    except Exception:
+        # If the configured path is unwritable, fall back to in-memory so the
+        # session still works rather than crashing on prompt construction.
+        return InMemoryHistory()
+
+
 def _get_session():
     global _session
     if _session is not None:
         return _session
     if not _HAVE_PROMPT_TOOLKIT:
         return None
-    HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
     _session = PromptSession(
         lexer=CodewuLexer(),
         completer=CodewuCompleter(),
         complete_while_typing=True,
-        history=FileHistory(str(HISTORY_FILE)),
+        history=_build_history(),
         style=_STYLE,
     )
     return _session

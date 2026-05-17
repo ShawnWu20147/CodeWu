@@ -36,6 +36,37 @@ for _stream in (sys.stdout, sys.stderr):
 # ---------------------------------------------------------------------------
 
 CONFIG_FILE = Path.home() / ".codewu" / "config.json"
+DEFAULT_HISTORY_FILE = Path.home() / ".codewu" / "history.txt"
+
+
+_CONFIG_TEMPLATE = {
+    "_comment": (
+        "CodeWu config. Edit any key to override its built-in default. "
+        "null means 'use the default'. Environment variables (CODEWU_*) "
+        "override this file. Run /config in CodeWu to see current effective "
+        "values and their sources."
+    ),
+    "base_url": None,
+    "model": None,
+    "api_key": None,
+    "history": None,
+    "history_file": None,
+}
+
+
+def _maybe_init_config_file() -> None:
+    """Create ~/.codewu/config.json with a template on first run.
+    Existing files are left untouched. Filesystem errors are silent."""
+    if CONFIG_FILE.exists():
+        return
+    try:
+        CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        CONFIG_FILE.write_text(
+            json.dumps(_CONFIG_TEMPLATE, indent=2),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
 
 
 def _load_user_config() -> tuple[dict[str, Any], str | None]:
@@ -55,15 +86,40 @@ def _load_user_config() -> tuple[dict[str, Any], str | None]:
     return data, None
 
 
+_maybe_init_config_file()
 _user_config, CONFIG_LOAD_ERROR = _load_user_config()
 
 
 def _resolve(env_name: str, config_key: str, default: str) -> tuple[str, str]:
-    """Resolve a setting from env > file > default. Returns (value, source)."""
+    """Resolve a setting from env > file > default. Returns (value, source).
+
+    null/None values in the config file are treated as 'not set' so the
+    auto-generated template (all-null) is a no-op.
+    """
     if env_name in os.environ:
         return os.environ[env_name], f"env: {env_name}"
-    if config_key in _user_config:
-        return str(_user_config[config_key]), f"file"
+    v = _user_config.get(config_key)
+    if v is not None:
+        return str(v), "file"
+    return default, "default"
+
+
+_TRUTHY = {"1", "true", "yes", "on", "y"}
+_FALSY = {"0", "false", "no", "off", "n"}
+
+
+def _resolve_bool(env_name: str, config_key: str, default: bool) -> tuple[bool, str]:
+    """Same as _resolve but parses booleans (1/true/yes/on vs 0/false/no/off)."""
+    if env_name in os.environ:
+        raw = os.environ[env_name].strip().lower()
+        if raw in _TRUTHY:
+            return True, f"env: {env_name}"
+        if raw in _FALSY:
+            return False, f"env: {env_name}"
+        # unrecognized → ignore env, fall through
+    v = _user_config.get(config_key)
+    if v is not None:
+        return bool(v), "file"
     return default, "default"
 
 
@@ -71,19 +127,32 @@ BASE_URL, BASE_URL_SRC = _resolve("CODEWU_BASE_URL", "base_url", "http://localho
 MODEL, MODEL_SRC = _resolve("CODEWU_MODEL", "model", "claude-opus-4.6-1m")
 API_KEY, API_KEY_SRC = _resolve("CODEWU_API_KEY", "api_key", "placeholder-not-used-by-proxy")
 
+HISTORY_ENABLED, HISTORY_ENABLED_SRC = _resolve_bool("CODEWU_HISTORY", "history", True)
+_history_file_raw, _history_file_src = _resolve(
+    "CODEWU_HISTORY_FILE", "history_file", str(DEFAULT_HISTORY_FILE),
+)
+HISTORY_FILE_PATH = Path(_history_file_raw).expanduser()
+HISTORY_FILE_SRC = _history_file_src
+
 
 def config_summary() -> list[tuple[str, str, str]]:
     """List of (key, displayed_value, source) for the /config command.
-    The api_key is masked unless it's the obvious placeholder.
+    api_key is masked unless it's the obvious placeholder.
     """
     if API_KEY_SRC == "default":
         api_display = API_KEY  # placeholder is not a secret
     else:
         api_display = "<set>"
+
+    history_display = "enabled" if HISTORY_ENABLED else "disabled"
+    history_file_display = str(HISTORY_FILE_PATH) if HISTORY_ENABLED else "(unused)"
+
     return [
         ("base_url", BASE_URL, BASE_URL_SRC),
         ("model", MODEL, MODEL_SRC),
         ("api_key", api_display, API_KEY_SRC),
+        ("history", history_display, HISTORY_ENABLED_SRC),
+        ("history_file", history_file_display, HISTORY_FILE_SRC if HISTORY_ENABLED else "—"),
     ]
 
 

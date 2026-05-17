@@ -189,6 +189,18 @@ D:\git-nonwork\CodeWu\
   - 新增 `--allow-all` CLI flag：跳过 y/n 提示但保留 preview，banner 显眼 ⚠ 警告
   - 顺手修了 `approve_or_skip` 中 `edit` 命令后 `cmd` 变量未刷新的小 bug
 - 2026-05-16 提交 git + 推送 `https://github.com/ShawnWu20147/CodeWu`（commit 18bbff5）
+- 2026-05-17 v1.11 history 开关 + 首次自动建 config 模板：
+  - **`~/.codewu/config.json` 首次启动自动建模板**（所有键设为 `null` + `_comment` 字段说明），让用户立刻能找到要编辑哪里；已存在则不动
+  - **`_resolve` 把 `null` 视作未设置**，走 default —— 模板里的 null 是 no-op，等用户改成实值才生效
+  - 新增 `_resolve_bool` 帮助函数：解析 `1/true/yes/on/y` ↔ `0/false/no/off/n`，env 字符串值无法识别时静默 fall through 到 file/default
+  - **config 新增 2 键**：
+    - `history`：bool，控制是否启用 prompt_toolkit 跨 session 历史。默认 true。
+    - `history_file`：string，自定义 history 文件路径。默认 `~/.codewu/history.txt`
+  - 对应 env 变量：`CODEWU_HISTORY` / `CODEWU_HISTORY_FILE`
+  - `repl._build_history`：根据 `config.HISTORY_ENABLED` 选 `FileHistory(path)` 或 `InMemoryHistory()`；路径不可写时 fallback 到 InMemory，避免 prompt 构造异常
+  - `/config` 显示扩到 5 行，history 关闭时 `history_file` 显示 `(unused)` source 为 `—`
+  - 实测：null 模板默认 → enabled；file `"history": false` → disabled (file)；env `CODEWU_HISTORY=1` 覆盖文件 → enabled (env)；env `CODEWU_HISTORY=0` → disabled (env)
+  - bump 版本 0.1.10 → 0.1.11
 - 2026-05-17 v1.10 prompt_toolkit 集成（交互体验对齐 Claude Code / Codex）：
   - 用户澄清依赖政策：「外部依赖」原意指**收费服务**（如 LLM API），开源 Python 包随便引；记得做版本控制防 regression
   - 加 `prompt_toolkit>=3.0.50,<4` 直接依赖（已实测 3.0.52 在环境中，纯 Python 唯一传递依赖 wcwidth）；`pyproject.toml` 版本 bump 到 0.1.10，`openai` 也加 `<2` 上界
