@@ -189,6 +189,18 @@ D:\git-nonwork\CodeWu\
   - 新增 `--allow-all` CLI flag：跳过 y/n 提示但保留 preview，banner 显眼 ⚠ 警告
   - 顺手修了 `approve_or_skip` 中 `edit` 命令后 `cmd` 变量未刷新的小 bug
 - 2026-05-16 提交 git + 推送 `https://github.com/ShawnWu20147/CodeWu`（commit 18bbff5）
+- 2026-05-18 v1.22 `>` 提示符根据输入模式变色 + 右侧 mode 提示：
+  - 用户希望仿 Claude Code 风格：打 `!` 时 `>` 整体变色 + 提示当前是 bash 模式
+  - `repl.py` 加 prompt_toolkit dynamic prompt：`session.prompt(_get_prompt_message, rprompt=_get_rprompt)`
+  - **3 模式可视化**：
+    - `chat` 模式（默认）：`>` 绿色 bold，无 rprompt
+    - `bash` 模式（输入以 `!` 开头）：`>` 蓝色 bold，右侧 `bash mode` 蓝色
+    - `slash` 模式（输入以 `/` 开头）：`>` 青色 bold，右侧 `slash command` 青色
+  - 模式检测用 `lstrip()` 后判首字符，`  !ls` 和 `!ls` 都触发 bash 模式
+  - prompt_toolkit dynamic prompt 每次重绘都重新调用 callable，所以删字符返回 chat 模式时 `>` 颜色立即恢复
+  - prompt_input 的 `message` 参数在 TTY 模式下忽略（用 dynamic），非 TTY pipe fallback 仍用 message + plain input()
+  - 单元测试 7 个用例覆盖 chat/bash/slash 三态 + 前导空格 + 空输入
+  - Sync `__version__` 0.1.21 → 0.1.22
 - 2026-05-17 v1.21 复现并理解 stream RemoteProtocolError 根因 + 快速 fallback：
   - 用户贡献关键 log 显示**每次失败前都先打了 `[~] calling tool: write_file`**——说明 tool_call name 已 stream 过来，断点在 args 字段流式过程中
   - nonstream 兜底成功后看到：3.2KB / 89 行 React 文件 + 1333 output tokens + 20.2s 完成

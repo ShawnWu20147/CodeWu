@@ -34,7 +34,9 @@ from . import ui
 
 try:
     from prompt_toolkit import PromptSession
+    from prompt_toolkit.application.current import get_app
     from prompt_toolkit.completion import Completer, Completion
+    from prompt_toolkit.formatted_text import FormattedText
     from prompt_toolkit.history import FileHistory, InMemoryHistory
     from prompt_toolkit.lexers import Lexer
     from prompt_toolkit.styles import Style
@@ -185,11 +187,45 @@ if _HAVE_PROMPT_TOOLKIT:
         "slash": "fg:ansicyan bold",
         "slash-arg": "fg:ansicyan",
         "at-file": "fg:ansimagenta",
+        # Dynamic prompt — color follows the active mode (chat / bash / slash).
+        "prompt.chat":  "fg:ansigreen bold",
+        "prompt.bash":  "fg:ansiblue bold",
+        "prompt.slash": "fg:ansicyan bold",
+        # Right-aligned mode hint.
+        "rprompt.bash":  "fg:ansiblue",
+        "rprompt.slash": "fg:ansicyan",
+        # Completion menu.
         "completion-menu.completion": "bg:#3a3a3a fg:#cccccc",
         "completion-menu.completion.current": "bg:#5f5f5f fg:#ffffff bold",
         "completion-menu.meta.completion": "bg:#3a3a3a fg:#888888",
         "completion-menu.meta.completion.current": "bg:#5f5f5f fg:#cccccc",
     })
+
+    # ---------------------------------------------------------------------
+    # Dynamic prompt — color + right-side hint react to what the user types.
+    # ---------------------------------------------------------------------
+
+    def _current_input_lstripped() -> str:
+        try:
+            return get_app().current_buffer.text.lstrip()
+        except Exception:
+            return ""
+
+    def _get_prompt_message():
+        s = _current_input_lstripped()
+        if s.startswith("!"):
+            return FormattedText([("class:prompt.bash", "> ")])
+        if s.startswith("/"):
+            return FormattedText([("class:prompt.slash", "> ")])
+        return FormattedText([("class:prompt.chat", "> ")])
+
+    def _get_rprompt():
+        s = _current_input_lstripped()
+        if s.startswith("!"):
+            return FormattedText([("class:rprompt.bash", " bash mode ")])
+        if s.startswith("/"):
+            return FormattedText([("class:rprompt.slash", " slash command ")])
+        return ""
 
 
 # ---------------------------------------------------------------------------
@@ -233,6 +269,10 @@ def prompt_input(message: str) -> str:
     """Read a line from the user. Uses prompt_toolkit when stdin is a TTY,
     otherwise falls back to plain input() for piped/redirected stdin so the
     automated tests still work.
+
+    In TTY mode the `message` argument is ignored — prompt_toolkit renders a
+    dynamic prompt whose color tracks the current input mode (chat/bash/slash)
+    plus a right-aligned mode hint via rprompt.
     """
     if not sys.stdin.isatty() or not _HAVE_PROMPT_TOOLKIT:
         sys.stdout.write(message)
@@ -243,7 +283,7 @@ def prompt_input(message: str) -> str:
         sys.stdout.write(message)
         sys.stdout.flush()
         return input()
-    return session.prompt(message)
+    return session.prompt(_get_prompt_message, rprompt=_get_rprompt)
 
 
 # ---------------------------------------------------------------------------
